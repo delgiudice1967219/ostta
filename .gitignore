@@ -11,5 +11,5 @@ paper/
 tests/
 data/CIFAR-10-C/
 data/models/
-data/content/
+data/content
 data/test_32x32.mat
