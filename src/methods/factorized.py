@@ -352,11 +352,11 @@ NOVA = dict(score="maxcos", gmm_fit="pooled", ood_op="l1_norm", label="soft")
 # lambda1=lam=0.2, plus a marginal anti-collapse term H(f-bar) with lambda2=0.2.
 UNIENT = dict(
     score="maxcos", gmm_fit="perbatch", ood_op="entropy_max", label="hard",
-    lam=0.2, marginal_lambda=0.2,
+    lam=0.2, marginal_lambda=0.2, warmup_K=0,  # constant LR (no warm-up), per the source paper/code
 )
 # UniEnt+: as UniEnt but SOFT, posterior-weighted ID/OOD contributions averaged
 # over the full batch (same lambda1/lambda2 = 0.2).
 UNIENT_PLUS = dict(
     score="maxcos", gmm_fit="perbatch", ood_op="entropy_max", label="soft",
-    lam=0.2, marginal_lambda=0.2,
+    lam=0.2, marginal_lambda=0.2, warmup_K=0,  # constant LR (no warm-up), per the source paper/code
 )
