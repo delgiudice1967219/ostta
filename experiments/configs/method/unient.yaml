@@ -1,0 +1,15 @@
+# UniEnt: maxcos score -> per-batch 2-component GMM -> HARD ID/OOD split; the
+# adapted model minimises entropy on pseudo-csID and maximises entropy on
+# pseudo-csOOD (ood_op=entropy_max, weighted by lambda1=lam=0.2), each term
+# averaged over its OWN subset, plus a marginal anti-collapse term H(f-bar)
+# (marginal_lambda=lambda2=0.2). Adam lr=1e-3, linear LR warm-up over K=10 steps.
+name: unient
+score: maxcos
+gmm_fit: perbatch
+ood_op: entropy_max
+label: hard
+lr: 1.0e-3
+lam: 0.2
+marginal_lambda: 0.2
+warmup_K: 10
+frozen: false
