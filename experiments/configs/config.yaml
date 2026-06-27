@@ -1,0 +1,25 @@
+defaults:
+  - method: tent          
+  - _self_
+
+corruption: gaussian_noise   
+severity: 5
+ood_source: svhn_c           
+N: 200                       # stream batch size (open-set => N//2 csID + N//2 csOOD)
+T: 80                        # adaptation steps
+seed: 0                      # drives the pool split AND the frozen stream order
+
+n_diag: 2000                 # held-out diagnostic count, per source
+
+batch_size: 200              # diagnostic eval mini-batch (mixed: //2 ID + //2 OOD)
+device: cpu                  # cpu | cuda
+out_dir: null                
+n_examples: 10000            
+n_ood_examples: null         
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}_${method.name}_${corruption}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${method.name}_${corruption}

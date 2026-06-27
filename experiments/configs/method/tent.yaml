@@ -1,0 +1,12 @@
+# Tent: pure entropy minimisation on the adapted model -- no scorer, no GMM, no
+# OOD term (gmm_fit=none => pi_ID=1). Adam lr=1e-3, linear LR warm-up over K=10
+# steps.
+name: tent
+score: null
+gmm_fit: none
+ood_op: none
+label: soft
+lr: 1.0e-3
+lam: 0.03
+warmup_K: 10
+frozen: false

@@ -1,0 +1,12 @@
+# NOVA-TTA: maxcos score -> pooled 2-component GMM -> soft P(OOD); the adapted
+# model minimises pi_ID*entropy + pi_OOD*lam*||features||_1. Adam lr=1e-3,
+# lam=0.03, linear LR warm-up over K=10 steps.
+name: nova
+score: maxcos
+gmm_fit: pooled
+ood_op: l1_norm
+label: soft
+lr: 1.0e-3
+lam: 0.03
+warmup_K: 10
+frozen: false
