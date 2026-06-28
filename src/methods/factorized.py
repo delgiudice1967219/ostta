@@ -24,8 +24,10 @@ where ``H`` is per-sample predictive (softmax) entropy, ``pi`` is detached,
 ``H(f-bar)`` is the entropy of the batch-mean softmax (the marginal anti-collapse
 term, weight ``marginal_lambda`` = lambda2), and ``aggregate`` is the per-``label``
 normalization. With ``marginal_lambda = 0`` the marginal term drops out (Tent /
-NOVA). One ``.step`` performs a single BN-affine Adam update with a linear LR
-warm-up.
+NOVA). When ``reliability_gate`` is set (the faithful UniEnt filter), the csID
+entropy term is additionally restricted to samples whose adapted confidence stayed
+``>=`` the frozen source's (the OOD and marginal terms are untouched). One ``.step``
+performs a single BN-affine Adam update with a linear LR warm-up.
 
 Two-model design:
 
@@ -71,6 +73,7 @@ def aggregate_loss(
     ood_contrib: torch.Tensor,
     pi_ood: torch.Tensor,
     label: str,
+    gate: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Combine the per-sample ID/OOD contributions into the scalar (pre-marginal) loss.
 
@@ -85,15 +88,35 @@ def aggregate_loss(
       ``sum(id_contrib)/max(sum(pi_ID),1) + sum(ood_contrib)/max(sum(pi_ood),1)``.
       The ``max(.,1)`` clamps guard an empty subset against division by zero.
 
+    ``gate`` is the OSTTA reliability mask -- a detached per-sample ``{0,1}``
+    tensor (shape ``[N]``) that restricts ONLY the csID entropy term to samples
+    whose adapted confidence did not drop below the frozen source's (see
+    :meth:`FactorizedAdapter._reliability_gate`). When ``gate is None`` the
+    behaviour above is reproduced EXACTLY (no gating). When provided, the csID
+    term is renormalised over the gated samples while the OOD term is unchanged:
+
+    * ``soft``: ``(id_contrib * gate).sum() / max(gate.sum(), 1)  +  ood.mean()``.
+    * ``hard``: ``(id_contrib * gate).sum() / max(sum(pi_ID * gate), 1)`` plus the
+      same (ungated) OOD per-subset mean.
+
     :returns: the scalar loss (grad-carrying through the contribution tensors).
     :rtype: torch.Tensor
     """
     if label == "soft":
-        return (id_contrib + ood_contrib).mean()
+        if gate is None:
+            return (id_contrib + ood_contrib).mean()
+        id_term = (id_contrib * gate).sum() / gate.sum().clamp(min=1.0)
+        ood_term = ood_contrib.mean()  # full-batch (unchanged by the gate)
+        return id_term + ood_term
     # hard: per-subset means using the {0,1} mask sizes as denominators.
     n_ood = pi_ood.sum().clamp(min=1.0)
-    n_id = (1.0 - pi_ood).sum().clamp(min=1.0)
-    return id_contrib.sum() / n_id + ood_contrib.sum() / n_ood
+    ood_term = ood_contrib.sum() / n_ood  # csOOD term is not gated
+    if gate is None:
+        n_id = (1.0 - pi_ood).sum().clamp(min=1.0)
+        return id_contrib.sum() / n_id + ood_term
+    # Gated csID term: averaged over {pseudo-csID AND gated}.
+    n_id_gated = ((1.0 - pi_ood) * gate).sum().clamp(min=1.0)
+    return (id_contrib * gate).sum() / n_id_gated + ood_term
 
 
 class FactorizedAdapter:
@@ -122,6 +145,14 @@ class FactorizedAdapter:
     :type marginal_lambda: float
     :param warmup_K: linear LR warm-up length in steps (``<= 0`` disables it).
     :type warmup_K: int
+    :param reliability_gate: if ``True`` the csID entropy-minimisation term is
+        restricted to samples whose ADAPTED softmax probability (read at the
+        frozen-source argmax class) stayed ``>=`` the frozen-source max
+        probability -- the OSTTA reliability gate that makes UniEnt faithful. The
+        OOD term and the marginal term are NOT gated. ``False`` (the default)
+        leaves the objective ungated (NOVA / Tent / BN-adapt). Requires the
+        frozen scorer (``gmm_fit != 'none'``) for the source confidence.
+    :type reliability_gate: bool
     :param scorer_frozen: if ``True`` (default) the OOD score is read from a
         frozen ``theta_0`` deepcopy of the backbone (NOVA's design -- a
         stationary score distribution). If ``False`` the score is read from the
@@ -149,6 +180,7 @@ class FactorizedAdapter:
         lam: float = 0.03,
         marginal_lambda: float = 0.0,
         warmup_K: int = 10,
+        reliability_gate: bool = False,
         scorer_frozen: bool = True,
         frozen: bool = False,
     ) -> None:
@@ -163,6 +195,12 @@ class FactorizedAdapter:
             raise ValueError(
                 f"score must be one of {_SCORES} when gmm_fit != 'none', got {score!r}"
             )
+        # The reliability gate reads the frozen-source confidence, which only
+        # exists when a frozen scorer is built (gmm_fit != 'none').
+        if reliability_gate and gmm_fit == "none":
+            raise ValueError(
+                "reliability_gate=True requires a frozen scorer (gmm_fit != 'none')"
+            )
 
         self.backbone = backbone
         self.score = score
@@ -173,6 +211,7 @@ class FactorizedAdapter:
         self.lam = lam
         self.marginal_lambda = marginal_lambda
         self.warmup_K = warmup_K
+        self.reliability_gate = reliability_gate
         self.scorer_frozen = scorer_frozen
         self.frozen = frozen
 
@@ -251,6 +290,30 @@ class FactorizedAdapter:
                 return -predictive_entropy(logits)           # -> higher = more ID
         raise ValueError(f"unknown score {self.score!r}")  # pragma: no cover
 
+    def _reliability_gate(
+        self, batch_x: torch.Tensor, logits: torch.Tensor
+    ) -> torch.Tensor:
+        """Detached OSTTA reliability mask, shape ``[N]`` (``{0, 1}`` in ``logits.dtype``).
+
+        A sample passes the gate iff its ADAPTED softmax probability, read at the
+        FROZEN-source argmax class, stayed ``>=`` the frozen source's max
+        probability -- i.e. adaptation did not erode that sample's confidence. The
+        frozen-source logits come from the ``theta_0`` scorer under
+        ``torch.no_grad()``; the adapted probabilities are detached before the
+        comparison, so the mask carries no gradient. It only selects which
+        samples' (grad-carrying) entropy contributes to the csID term.
+        """
+        assert self.scorer is not None
+        with torch.no_grad():
+            _, logits0 = self.scorer._forward(batch_x)        # frozen theta_0 source
+            probs0 = logits0.softmax(dim=-1)
+            values0, indices0 = probs0.max(dim=-1)            # source max prob + argmax
+            probs = logits.softmax(dim=-1)                    # adapted
+            values = probs.detach()[
+                torch.arange(probs.shape[0], device=probs.device), indices0
+            ]                                                 # adapted prob at the source argmax
+            return (values >= values0).to(logits.dtype)       # [N], detached {0,1}
+
     def _ood_weight(self, batch_x: torch.Tensor, device_ref: torch.Tensor) -> torch.Tensor:
         """Detached per-sample OOD weight ``pi_OOD`` in ``[0, 1]``, shape ``[N]``.
 
@@ -316,9 +379,16 @@ class FactorizedAdapter:
         marginal anti-collapse term ``H(f-bar)`` is subtracted with weight
         ``marginal_lambda``. With ``marginal_lambda == 0`` the loss is exactly the
         pre-marginal aggregation (Tent / NOVA unchanged).
+
+        When ``reliability_gate`` is set, a detached OSTTA mask (see
+        :meth:`_reliability_gate`) restricts the csID entropy term to the samples
+        whose adapted confidence did not drop below the frozen source's; the OOD
+        and marginal terms are untouched. Otherwise the gate is ``None`` and
+        ``aggregate_loss`` reproduces the ungated behaviour exactly.
         """
         id_contrib, ood_contrib, pi_ood, logits = self._components(batch_x)
-        loss = aggregate_loss(id_contrib, ood_contrib, pi_ood, self.label)
+        gate = self._reliability_gate(batch_x, logits) if self.reliability_gate else None
+        loss = aggregate_loss(id_contrib, ood_contrib, pi_ood, self.label, gate=gate)
         if self.marginal_lambda != 0.0:
             loss = loss - self.marginal_lambda * softmax_mean_entropy(logits)
         return loss
@@ -378,13 +448,17 @@ NOVA = dict(score="maxcos", gmm_fit="pooled", ood_op="l1_norm", label="soft")
 # UniEnt: maxcos-scored per-batch GMM, HARD ID/OOD split (each entropy term
 # averaged over its own pseudo-subset), entropy-max csOOD op weighted by
 # lambda1=lam=0.2, plus a marginal anti-collapse term H(f-bar) with lambda2=0.2.
+# The reliability gate restricts the csID entropy term to samples whose adapted
+# confidence stayed >= the frozen source's (the faithful OSTTA filter).
 UNIENT = dict(
     score="maxcos", gmm_fit="perbatch", ood_op="entropy_max", label="hard",
     lam=0.2, marginal_lambda=0.2, warmup_K=0,  # constant LR (no warm-up), per the source paper/code
+    reliability_gate=True,
 )
 # UniEnt+: as UniEnt but SOFT, posterior-weighted ID/OOD contributions averaged
-# over the full batch (same lambda1/lambda2 = 0.2).
+# over the full batch (same lambda1/lambda2 = 0.2), with the same reliability gate.
 UNIENT_PLUS = dict(
     score="maxcos", gmm_fit="perbatch", ood_op="entropy_max", label="soft",
     lam=0.2, marginal_lambda=0.2, warmup_K=0,  # constant LR (no warm-up), per the source paper/code
+    reliability_gate=True,
 )

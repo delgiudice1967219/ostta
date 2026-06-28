@@ -1,0 +1,13 @@
+# Continual gate×lever ablation (NOVA detector held fixed: maxcos/pooled/soft,
+# marginal_lambda=0, warmup_K=10). L1 lever + reliability gate = "NOVA + gate".
+name: cont_l1_gate
+score: maxcos
+gmm_fit: pooled
+ood_op: l1_norm
+label: soft
+lr: 1.0e-3
+lam: 0.03
+marginal_lambda: 0.0
+warmup_K: 10
+reliability_gate: true
+frozen: false

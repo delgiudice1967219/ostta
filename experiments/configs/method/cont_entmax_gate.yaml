@@ -1,0 +1,13 @@
+# Continual gate×lever ablation (NOVA detector held fixed). Entropy-max lever
+# + reliability gate. (Isolates the gate's effect on the entropy-max lever.)
+name: cont_entmax_gate
+score: maxcos
+gmm_fit: pooled
+ood_op: entropy_max
+label: soft
+lr: 1.0e-3
+lam: 0.2
+marginal_lambda: 0.0
+warmup_K: 10
+reliability_gate: true
+frozen: false
