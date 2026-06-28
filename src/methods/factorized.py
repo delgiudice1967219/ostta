@@ -122,6 +122,13 @@ class FactorizedAdapter:
     :type marginal_lambda: float
     :param warmup_K: linear LR warm-up length in steps (``<= 0`` disables it).
     :type warmup_K: int
+    :param scorer_frozen: if ``True`` (default) the OOD score is read from a
+        frozen ``theta_0`` deepcopy of the backbone (NOVA's design -- a
+        stationary score distribution). If ``False`` the score is read from the
+        *adapting* backbone instead (``self.scorer is self.backbone``), so the
+        scored features drift as the BN affine params adapt (the classifier
+        ``W`` is frozen regardless). Only consulted when ``gmm_fit != 'none'``.
+    :type scorer_frozen: bool
     :param frozen: if ``True`` the adapter never updates ``theta`` -- ``.step``
         only advances the step counter and returns, so ``theta`` stays at
         ``theta_0`` for the whole stream. This is the BN-adapt baseline: the
@@ -142,6 +149,7 @@ class FactorizedAdapter:
         lam: float = 0.03,
         marginal_lambda: float = 0.0,
         warmup_K: int = 10,
+        scorer_frozen: bool = True,
         frozen: bool = False,
     ) -> None:
         if gmm_fit not in _GMM_FITS:
@@ -165,6 +173,7 @@ class FactorizedAdapter:
         self.lam = lam
         self.marginal_lambda = marginal_lambda
         self.warmup_K = warmup_K
+        self.scorer_frozen = scorer_frozen
         self.frozen = frozen
 
         # Adapt only the BN affine params (idempotent re-assertion).
@@ -177,7 +186,13 @@ class FactorizedAdapter:
         self.optimizer: torch.optim.Optimizer | None = None
         if not self.frozen:
             if self.gmm_fit != "none":
-                self.scorer = self._build_frozen_scorer(backbone)
+                # Default: a frozen theta_0 deepcopy (stationary score). With
+                # scorer_frozen=False the score is read from the live adapting
+                # backbone instead (the frozen-vs-adapting ablation).
+                if self.scorer_frozen:
+                    self.scorer = self._build_frozen_scorer(backbone)
+                else:
+                    self.scorer = self.backbone
                 self.posterior = OODPosterior(mode=self.gmm_fit)
             # Adam over the BN affine params; the per-step LR is set in `.step`.
             self.optimizer = torch.optim.Adam(
@@ -202,6 +217,19 @@ class FactorizedAdapter:
         scorer_model.requires_grad_(False)
         scorer = Backbone(scorer_model, device=backbone.device)
         return scorer
+
+    # ------------------------------------------------------------------ detector reset
+    def reset_detector(self) -> None:
+        """Clear the pooled OOD detector at a corruption boundary.
+
+        The continual runner calls this at each of the 15 corruption boundaries
+        so the pooled GMM re-pools per corruption (the frozen score is only
+        stationary within a corruption). A no-op when ``gmm_fit == 'none'``
+        (``self.posterior is None``); harmless for ``perbatch`` (which keeps no
+        cross-batch history anyway -- ``reset`` just clears the latest fit).
+        """
+        if self.posterior is not None:
+            self.posterior.reset()
 
     # --------------------------------------------------------------------- posterior
     def _frozen_score(self, batch_x: torch.Tensor) -> torch.Tensor:

@@ -1,0 +1,20 @@
+defaults:
+  - method: nova
+  - _self_
+
+severity: 5
+ood_source: svhn_c
+n_examples: 10000          # per corruption, csID and csOOD (paper uses 10000 each)
+batch_csid: 100            # 100 csID + 100 csOOD = 200-image forward
+seed: 1                    # seeds the SVHN-C generation (reproducible csOOD)
+svhnc_cache: true          # full-set disk cache; smoke sets false for speed
+device: cuda
+out_dir: null
+corruptions: null          # null => all 15 in CORRUPTIONS order; a list => subset (smoke)
+
+hydra:
+  run:
+    dir: outputs/continual/${now:%Y-%m-%d}/${now:%H-%M-%S}_${method.name}
+  sweep:
+    dir: multirun/continual/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${method.name}

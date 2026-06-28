@@ -39,6 +39,19 @@ class OODPosterior:
         self.gmm: GaussianMixture | None = None
         self._ood_idx: int | None = None          # column of predict_proba that is OOD
 
+    def reset(self) -> None:
+        """Clear the pooled state so the next ``update`` starts a fresh fit.
+
+        Drops the accumulated history and the fitted mixture
+        (``self._history = []``, ``self.gmm = None``, ``self._ood_idx = None``).
+        The continual runner calls this at each corruption boundary because the
+        frozen score is only stationary *within* a corruption -- pooling across
+        corruptions would mix non-stationary score distributions.
+        """
+        self._history = []
+        self.gmm = None
+        self._ood_idx = None
+
     def update(self, scores) -> None:
         """Refit the mixture.
 
