@@ -76,7 +76,7 @@ def _load_sources(cfg: DictConfig) -> tuple[
     # corrupted.
     n_ood = cfg.get("n_ood_examples", None)
     ood_indices = list(range(n_ood)) if n_ood is not None else None
-    x_csood, _ = ood_loader(cfg.corruption, cfg.severity, indices=ood_indices)
+    x_csood, _ = ood_loader(cfg.corruption, cfg.severity, indices=ood_indices, seed=cfg.seed)
 
     return x_csid, y_csid, x_csood
 
