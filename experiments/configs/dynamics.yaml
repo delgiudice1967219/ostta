@@ -1,0 +1,21 @@
+# Posterior-quality-over-time (pooled vs per-batch GMM) -- frozen-theta_0 scorer,
+# NO adaptation. seed=0 reuses the SVHN-C disk cache from earlier runs.
+corruption: gaussian_noise
+severity: 5
+ood_source: svhn_c
+N: 200                       # stream batch size (open-set => N//2 csID + N//2 csOOD)
+T: 80                        # adaptation steps (stream length)
+seed: 0                      # drives the pool split AND the frozen stream order
+n_diag: 2000                 # held-out diagnostic count, per source
+n_examples: 10000            # csID count (and SVHN-C subset when n_ood_examples set)
+n_ood_examples: null         # null => full SVHN-C test set as csOOD
+batch_size: 200              # frozen-scorer eval mini-batch over the diagnostic set
+device: cuda                 # cpu | cuda
+out_dir: null
+
+hydra:
+  run:
+    dir: outputs/dynamics/${now:%Y-%m-%d}/${now:%H-%M-%S}_${corruption}
+  sweep:
+    dir: multirun/dynamics/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${corruption}
