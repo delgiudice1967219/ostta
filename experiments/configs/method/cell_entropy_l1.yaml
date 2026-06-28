@@ -1,0 +1,11 @@
+# entropy_l1 = NOVA's lever, score-axis swapped maxcos->entropy (detector ablation).
+name: entropy_l1
+score: entropy
+gmm_fit: pooled
+ood_op: l1_norm
+label: soft
+lr: 1.0e-3
+lam: 0.03
+marginal_lambda: 0.0
+warmup_K: 10
+frozen: false

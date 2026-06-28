@@ -1,0 +1,11 @@
+# unient_energy = UniEnt with an energy filter (Phase-2 finding; read WITH the energy/eval coupling caveat).
+name: unient_energy
+score: energy
+gmm_fit: perbatch
+ood_op: entropy_max
+label: hard
+lr: 1.0e-3
+lam: 0.2
+marginal_lambda: 0.2
+warmup_K: 0
+frozen: false

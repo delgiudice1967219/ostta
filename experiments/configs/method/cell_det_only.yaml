@@ -1,0 +1,11 @@
+# det_only = NOVA detector, no csOOD op (lever baseline).
+name: det_only
+score: maxcos
+gmm_fit: pooled
+ood_op: none
+label: soft
+lr: 1.0e-3
+lam: 0.0
+marginal_lambda: 0.0
+warmup_K: 10
+frozen: false

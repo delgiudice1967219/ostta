@@ -1,0 +1,11 @@
+# novadet_entmax = NOVA detector + UniEnt lever (entropy-max) -- the lever swap vs NOVA.
+name: novadet_entmax
+score: maxcos
+gmm_fit: pooled
+ood_op: entropy_max
+label: soft
+lr: 1.0e-3
+lam: 0.2
+marginal_lambda: 0.0
+warmup_K: 10
+frozen: false
