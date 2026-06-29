@@ -48,7 +48,7 @@ def fig_geometry(corruption: str = "gaussian_noise") -> Path:
         ("auroc",       "detection AUROC (energy)",               "the outcome"),
     ]
     plt.rcParams.update({"font.size": 11, "axes.titlesize": 11.5, "font.family": "sans-serif"})
-    fig, axes = plt.subplots(1, 3, figsize=(11.2, 3.5))
+    fig, axes = plt.subplots(1, 3, figsize=(11.8, 2.6))
 
     for ax, (key, ylab, sub) in zip(axes, panels):
         for m in ORDER:
@@ -70,12 +70,8 @@ def fig_geometry(corruption: str = "gaussian_noise") -> Path:
                           lw=STYLE[m]["lw"], label=STYLE[m]["label"]) for m in ORDER]
     fig.legend(handles=handles, loc="lower center", ncol=5, frameon=False,
                bbox_to_anchor=(0.5, -0.02))
-    fig.suptitle(
-        "Closed-set entropy-min inflates csOOD confidence and collapses detection; "
-        "NOVA opens the feature-norm gap instead",
-        fontsize=11.5, y=1.02,
-    )
-    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    # suptitle omitted: the paper caption carries this message (keeps the float compact).
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
 
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     png = FIG_DIR / "fig_geometry.png"
