@@ -15,7 +15,7 @@ from data.cifar10c import load_cifar10c_data
 from data.pools import DataPools
 from data.stream import build_stream
 from data.svhnc import load_svhn_c
-from eval.timetrack import run_timetrack
+from eval.timetrack import run_timetrack, diag_energy_norm
 from methods.factorized import FactorizedAdapter
 from models.backbone import load_backbone
 
@@ -31,6 +31,8 @@ _OOD_LOADERS = {
 _METRIC_KEYS = (
     "auroc",
     "acc",
+    "fpr",
+    "oscr",
     "norm_gap_l2",
     "norm_gap_l1",
     "maxcos_id",
@@ -170,6 +172,8 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
         T=cfg.T,
         open_set=True,
         seed=cfg.seed,
+        # openness alpha -> per-batch csOOD count (default 0.5 => N//2).
+        n_ood=round(cfg.get("alpha", 0.5) * cfg.N),
     )
 
     # Held-out diagnostic set D = the *diag* pools (moved to the eval device so the
@@ -185,6 +189,12 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
     adapter = _build_adapter(backbone, cfg.method)
     log.info("Method=%s (frozen=%s)", cfg.method.name, adapter.frozen)
 
+    # Optional per-sample dump for the energy/feature-norm distribution figure:
+    # snapshot the diagnostic set at theta_0 (before any step); theta_T is taken
+    # after the trajectory below.
+    dump = bool(cfg.get("dump_per_sample", False))
+    dump0 = diag_energy_norm(backbone, D, cfg.batch_size) if dump else None
+
     # ── Trace m(t) for t = 0..T and persist ────────────────────────────────────
     trajectory = run_timetrack(
         backbone, adapter, stream, D, cfg.T, batch_size=cfg.batch_size
@@ -192,6 +202,17 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
 
     summary = _save_outputs(out_dir, trajectory)
     log.info("Saved timetrack.npz + summary.json to %s", out_dir)
+
+    if dump:
+        dumpT = diag_energy_norm(backbone, D, cfg.batch_size)
+        np.savez(
+            out_dir / "dump.npz",
+            energy_id_t0=dump0["energy_id"], energy_ood_t0=dump0["energy_ood"],
+            norm_id_t0=dump0["norm_id"], norm_ood_t0=dump0["norm_ood"],
+            energy_id_tT=dumpT["energy_id"], energy_ood_tT=dumpT["energy_ood"],
+            norm_id_tT=dumpT["norm_id"], norm_ood_tT=dumpT["norm_ood"],
+        )
+        log.info("Saved per-sample dump.npz to %s", out_dir)
     log.info("Summary:\n%s", json.dumps(summary, indent=2))
     return summary
 
