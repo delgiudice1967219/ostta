@@ -4,7 +4,7 @@ import torch
 
 from models.backbone import Backbone
 from scoring.energy import energy_score
-from eval.metrics import auroc, accuracy, geometry_diagnostics
+from eval.metrics import auroc, accuracy, geometry_diagnostics, fpr_at_tpr95, oscr
 
 
 def _diag_forward(
@@ -67,7 +67,9 @@ def _eval_theta_t(
     """Evaluate the current (post-update) ``theta_t`` on ``D`` -> one ``m(t)`` dict.
 
     ``D`` carries the diagnostic tensors ``(x_csid, y_csid, x_csood)``. Returns
-    ``{t, auroc, acc, norm_gap_l2, norm_gap_l1, maxcos_id, maxcos_ood, conf_ood}``.
+    ``{t, auroc, acc, fpr, oscr, norm_gap_l2, norm_gap_l1, maxcos_id, maxcos_ood,
+    conf_ood}`` -- ``fpr`` is FPR@TPR95 (csOOD positive, lower better) and ``oscr``
+    the open-set classification rate (higher better).
     """
     feat_id, logits_id, feat_ood, logits_ood = _diag_forward(
         backbone, D.x_csid, D.x_csood, batch_size
@@ -81,6 +83,13 @@ def _eval_theta_t(
         "t": t,
         "auroc": auroc(scores_id, scores_ood),
         "acc": accuracy(logits_id, D.y_csid),
+        # FPR@95 expects higher = more OOD, so negate the ID-oriented scores;
+        # OSCR expects higher = more ID, which scores_id / scores_ood already are.
+        "fpr": fpr_at_tpr95(
+            torch.cat([-scores_id, -scores_ood]),
+            torch.cat([torch.zeros(len(scores_id)), torch.ones(len(scores_ood))]),
+        ),
+        "oscr": oscr(scores_id, scores_ood, logits_id.argmax(dim=-1), D.y_csid),
     }
     m.update(
         geometry_diagnostics(feat_id, feat_ood, logits_id, logits_ood, backbone.W)
@@ -115,8 +124,8 @@ def run_timetrack(
         defaults to 200 -> 20 batches of 100 + 100 over the diagnostic set ``D``.
     :type batch_size: int
     :returns: a list of ``T + 1`` dicts, ``m(t)`` for ``t = 0..T``, each with keys
-        ``{t, auroc, acc, norm_gap_l2, norm_gap_l1, maxcos_id, maxcos_ood,
-        conf_ood}``.
+        ``{t, auroc, acc, fpr, oscr, norm_gap_l2, norm_gap_l1, maxcos_id,
+        maxcos_ood, conf_ood}``.
     :rtype: list[dict]
     """
     # BN must stay in train mode (batch statistics) for eval -- the same regime as
@@ -135,3 +144,29 @@ def run_timetrack(
         trajectory.append(_eval_theta_t(backbone, adapter.t, D, batch_size))
 
     return trajectory
+
+
+def diag_energy_norm(backbone: Backbone, D, batch_size: int = 200) -> dict:
+    """Per-sample energy and L2 feature norm on the diagnostic set ``D``.
+
+    Feeds the energy / feature-norm distribution figure. Returns four 1-D numpy
+    arrays: ``energy_id`` / ``energy_ood`` (raw energy ``E``; csID is lower-energy)
+    and ``norm_id`` / ``norm_ood`` (L2 penultimate-feature norms). No-grad,
+    train-mode (the same BN regime as adaptation and eval); touches no parameter.
+
+    :param backbone: the model at its current ``theta_t`` (``Backbone``).
+    :param D: diagnostic-set carrier exposing ``x_csid`` / ``x_csood``.
+    :param batch_size: eval mini-batch size (mixed ``//2`` ID + ``//2`` OOD).
+    :returns: ``{energy_id, energy_ood, norm_id, norm_ood}`` of numpy arrays.
+    :rtype: dict
+    """
+    backbone.model.train()
+    feat_id, logits_id, feat_ood, logits_ood = _diag_forward(
+        backbone, D.x_csid, D.x_csood, batch_size
+    )
+    return {
+        "energy_id": energy_score(logits_id).detach().cpu().numpy(),
+        "energy_ood": energy_score(logits_ood).detach().cpu().numpy(),
+        "norm_id": feat_id.norm(dim=-1).detach().cpu().numpy(),
+        "norm_ood": feat_ood.norm(dim=-1).detach().cpu().numpy(),
+    }
