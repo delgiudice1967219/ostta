@@ -189,11 +189,12 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
     adapter = _build_adapter(backbone, cfg.method)
     log.info("Method=%s (frozen=%s)", cfg.method.name, adapter.frozen)
 
-    # Optional per-sample dump for the energy/feature-norm distribution figure:
-    # snapshot the diagnostic set at theta_0 (before any step); theta_T is taken
-    # after the trajectory below.
+    # Optional snapshot of the diagnostic set at theta_0 (before any step) and
+    # theta_T (after): per-sample energy/norm (distribution figure) and/or the
+    # full penultimate embeddings + labels (t-SNE latent-space figure).
     dump = bool(cfg.get("dump_per_sample", False))
-    dump0 = diag_energy_norm(backbone, D, cfg.batch_size) if dump else None
+    dump_feat = bool(cfg.get("dump_features", False))
+    snap0 = diag_energy_norm(backbone, D, cfg.batch_size) if (dump or dump_feat) else None
 
     # ── Trace m(t) for t = 0..T and persist ────────────────────────────────────
     trajectory = run_timetrack(
@@ -203,16 +204,25 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
     summary = _save_outputs(out_dir, trajectory)
     log.info("Saved timetrack.npz + summary.json to %s", out_dir)
 
-    if dump:
-        dumpT = diag_energy_norm(backbone, D, cfg.batch_size)
-        np.savez(
-            out_dir / "dump.npz",
-            energy_id_t0=dump0["energy_id"], energy_ood_t0=dump0["energy_ood"],
-            norm_id_t0=dump0["norm_id"], norm_ood_t0=dump0["norm_ood"],
-            energy_id_tT=dumpT["energy_id"], energy_ood_tT=dumpT["energy_ood"],
-            norm_id_tT=dumpT["norm_id"], norm_ood_tT=dumpT["norm_ood"],
-        )
-        log.info("Saved per-sample dump.npz to %s", out_dir)
+    if dump or dump_feat:
+        snapT = diag_energy_norm(backbone, D, cfg.batch_size)
+        arrays = {}
+        if dump:
+            arrays.update(
+                energy_id_t0=snap0["energy_id"], energy_ood_t0=snap0["energy_ood"],
+                norm_id_t0=snap0["norm_id"], norm_ood_t0=snap0["norm_ood"],
+                energy_id_tT=snapT["energy_id"], energy_ood_tT=snapT["energy_ood"],
+                norm_id_tT=snapT["norm_id"], norm_ood_tT=snapT["norm_ood"],
+            )
+        if dump_feat:
+            arrays.update(
+                feat_id_t0=snap0["feat_id"], feat_ood_t0=snap0["feat_ood"],
+                feat_id_tT=snapT["feat_id"], feat_ood_tT=snapT["feat_ood"],
+                y_id=D.y_csid.detach().cpu().numpy(),
+            )
+        np.savez(out_dir / "dump.npz", **arrays)
+        log.info("Saved dump.npz (per-sample=%s, features=%s) to %s",
+                 dump, dump_feat, out_dir)
     log.info("Summary:\n%s", json.dumps(summary, indent=2))
     return summary
 

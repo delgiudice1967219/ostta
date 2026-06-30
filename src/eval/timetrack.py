@@ -169,4 +169,7 @@ def diag_energy_norm(backbone: Backbone, D, batch_size: int = 200) -> dict:
         "energy_ood": energy_score(logits_ood).detach().cpu().numpy(),
         "norm_id": feat_id.norm(dim=-1).detach().cpu().numpy(),
         "norm_ood": feat_ood.norm(dim=-1).detach().cpu().numpy(),
+        # full penultimate embeddings (for the t-SNE latent-space figure)
+        "feat_id": feat_id.detach().cpu().numpy(),
+        "feat_ood": feat_ood.detach().cpu().numpy(),
     }

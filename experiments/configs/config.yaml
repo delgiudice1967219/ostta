@@ -14,8 +14,12 @@ n_diag: 2000                 # held-out diagnostic count, per source
 batch_size: 200              # diagnostic eval mini-batch (mixed: //2 ID + //2 OOD)
 device: cpu                  # cpu | cuda
 out_dir: null                
-n_examples: 10000            
-n_ood_examples: null         
+n_examples: 10000
+n_ood_examples: null
+
+alpha: 0.5                   # open-set OOD fraction per batch (n_ood = round(alpha*N))
+dump_per_sample: false       # also dump per-sample energy + L2 norm (distribution figure)
+dump_features: false         # also dump penultimate embeddings + labels (t-SNE figure)
 
 hydra:
   run:
