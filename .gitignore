@@ -14,3 +14,5 @@ data/models/
 data/content
 data/test_32x32.mat
 data/svhnc_cache/
+*.pt
+data/cifar-10-batches-py

@@ -1,7 +1,7 @@
 # BN-adapt: the shared t=0 baseline. The adapter never updates theta -- its
 # `.step` is a no-op (frozen=True), so the trajectory is flat at theta_0. The
-# only thing that varies per batch is the current-batch BN statistic (the
-# project's BN-adapt default). All other axes are inert in this mode.
+# only thing that varies per batch is the current-batch BN statistic.
+# All other axes are inert in this mode.
 name: bnadapt
 score: null
 gmm_fit: none
