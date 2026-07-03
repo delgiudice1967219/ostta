@@ -11,10 +11,12 @@ import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
+from data.cifar10 import load_cifar10_data
 from data.cifar10c import load_cifar10c_data
 from data.pools import DataPools
 from data.stream import build_stream
 from data.svhnc import load_svhn_c
+from eval.metrics import class_centroids
 from eval.timetrack import run_timetrack, diag_energy_norm
 from methods.factorized import FactorizedAdapter
 from models.backbone import load_backbone
@@ -38,6 +40,9 @@ _METRIC_KEYS = (
     "maxcos_id",
     "maxcos_ood",
     "conf_ood",
+    "srccos_ood",
+    "cdist_id",
+    "cdist_ood",
 )
 
 
@@ -46,17 +51,20 @@ class DiagSet:
     """Held-out diagnostic set ``D`` consumed by :func:`run_timetrack`.
 
     Carries the ``(x_csid, y_csid, x_csood)`` slices; the time-tracker evaluates
-    the post-update model on these at every step.
+    the post-update model on these at every step. The two optional theta_0
+    references feed the absorption diagnostics: ``src_class_ood`` is filled in by
+    :func:`run_timetrack` at ``t=0``; ``centroids`` holds the frozen clean-CIFAR
+    class centroids computed by :func:`run_pipeline`.
     """
 
     x_csid: torch.Tensor
     y_csid: torch.Tensor
     x_csood: torch.Tensor
+    src_class_ood: torch.Tensor | None = None
+    centroids: torch.Tensor | None = None
 
 
-def _load_sources(cfg: DictConfig) -> tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor
-]:
+def _load_sources(cfg: DictConfig) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Load csID (CIFAR-10-C) and csOOD (e.g. SVHN-C) for ``corruption@severity``.
 
     Returns ``(x_csid, y_csid, x_csood)``. ``cfg.n_examples`` subsets both
@@ -78,7 +86,9 @@ def _load_sources(cfg: DictConfig) -> tuple[
     # corrupted.
     n_ood = cfg.get("n_ood_examples", None)
     ood_indices = list(range(n_ood)) if n_ood is not None else None
-    x_csood, _ = ood_loader(cfg.corruption, cfg.severity, indices=ood_indices, seed=cfg.seed)
+    x_csood, _ = ood_loader(
+        cfg.corruption, cfg.severity, indices=ood_indices, seed=cfg.seed
+    )
 
     return x_csid, y_csid, x_csood
 
@@ -186,6 +196,27 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
 
     # ── Model + adapter ─────────────────────────────────────────────────────────
     backbone = load_backbone(device)
+
+    # Frozen clean-feature class centroids (absorption diagnostic): computed once
+    # from theta_0 on the clean CIFAR-10 test set in clean-only batches, then
+    # cached on disk -- theta_0 and the clean set are seed-independent.
+    centroids_path = Path(
+        cfg.get("centroids_cache", f"data/centroids_theta0_n{cfg.n_examples}.pt")
+    )
+    if centroids_path.exists():
+        D.centroids = torch.load(centroids_path, map_location=device, weights_only=True)
+    else:
+        x_clean, y_clean = load_cifar10_data(n_examples=cfg.n_examples)
+        feats = []
+        with torch.no_grad():
+            for k in range(0, len(x_clean), cfg.batch_size):
+                f, _ = backbone._forward(x_clean[k : k + cfg.batch_size].to(device))
+                feats.append(f)
+        D.centroids = class_centroids(torch.cat(feats), y_clean.to(device))
+        centroids_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(D.centroids.detach().cpu(), centroids_path)
+        log.info("Computed + cached theta_0 clean centroids at %s", centroids_path)
+
     adapter = _build_adapter(backbone, cfg.method)
     log.info("Method=%s (frozen=%s)", cfg.method.name, adapter.frozen)
 
@@ -194,7 +225,9 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
     # full penultimate embeddings + labels (t-SNE latent-space figure).
     dump = bool(cfg.get("dump_per_sample", False))
     dump_feat = bool(cfg.get("dump_features", False))
-    snap0 = diag_energy_norm(backbone, D, cfg.batch_size) if (dump or dump_feat) else None
+    snap0 = (
+        diag_energy_norm(backbone, D, cfg.batch_size) if (dump or dump_feat) else None
+    )
 
     # ── Trace m(t) for t = 0..T and persist ────────────────────────────────────
     trajectory = run_timetrack(
@@ -209,20 +242,35 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
         arrays = {}
         if dump:
             arrays.update(
-                energy_id_t0=snap0["energy_id"], energy_ood_t0=snap0["energy_ood"],
-                norm_id_t0=snap0["norm_id"], norm_ood_t0=snap0["norm_ood"],
-                energy_id_tT=snapT["energy_id"], energy_ood_tT=snapT["energy_ood"],
-                norm_id_tT=snapT["norm_id"], norm_ood_tT=snapT["norm_ood"],
+                energy_id_t0=snap0["energy_id"],
+                energy_ood_t0=snap0["energy_ood"],
+                norm_id_t0=snap0["norm_id"],
+                norm_ood_t0=snap0["norm_ood"],
+                energy_id_tT=snapT["energy_id"],
+                energy_ood_tT=snapT["energy_ood"],
+                norm_id_tT=snapT["norm_id"],
+                norm_ood_tT=snapT["norm_ood"],
+                # frozen (t=0) per-sample alignment scores -> score-density figure
+                maxcos_id_t0=snap0["maxcos_id"],
+                maxcos_ood_t0=snap0["maxcos_ood"],
+                maxcos_id_tT=snapT["maxcos_id"],
+                maxcos_ood_tT=snapT["maxcos_ood"],
             )
         if dump_feat:
             arrays.update(
-                feat_id_t0=snap0["feat_id"], feat_ood_t0=snap0["feat_ood"],
-                feat_id_tT=snapT["feat_id"], feat_ood_tT=snapT["feat_ood"],
+                feat_id_t0=snap0["feat_id"],
+                feat_ood_t0=snap0["feat_ood"],
+                feat_id_tT=snapT["feat_id"],
+                feat_ood_tT=snapT["feat_ood"],
                 y_id=D.y_csid.detach().cpu().numpy(),
             )
         np.savez(out_dir / "dump.npz", **arrays)
-        log.info("Saved dump.npz (per-sample=%s, features=%s) to %s",
-                 dump, dump_feat, out_dir)
+        log.info(
+            "Saved dump.npz (per-sample=%s, features=%s) to %s",
+            dump,
+            dump_feat,
+            out_dir,
+        )
     log.info("Summary:\n%s", json.dumps(summary, indent=2))
     return summary
 

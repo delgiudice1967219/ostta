@@ -136,14 +136,17 @@ def geometry_diagnostics(
     logits_id: torch.Tensor,
     logits_ood: torch.Tensor,
     W: torch.Tensor,
+    src_class_ood: torch.Tensor | None = None,
+    centroids: torch.Tensor | None = None,
 ) -> dict:
     """Per-step geometry diagnostics on the *adapted* diagnostic-set tensors.
 
     All inputs are assumed already computed under ``torch.no_grad()`` from the
     adapted model (this function never touches the model). Reductions are plain
-    means, returned as Python floats. (A distance-to-frozen-centroid diagnostic
-    is not computed here -- it would need clean-CIFAR centroids this function
-    does not build.)
+    means, returned as Python floats. The two absorption diagnostics
+    (``srccos_ood``, ``cdist_*``) need frozen theta_0 references; when those are
+    not provided the keys are still emitted, as NaN, so the trajectory schema
+    stays fixed.
 
     :param features_id: ``[N_id, d]`` adapted csID penultimate features.
     :type features_id: torch.Tensor
@@ -156,6 +159,12 @@ def geometry_diagnostics(
     :type logits_ood: torch.Tensor
     :param W: ``[K, d]`` (frozen) classifier weight matrix, for max-cosine.
     :type W: torch.Tensor
+    :param src_class_ood: ``[N_ood]`` theta_0-predicted class of each csOOD input
+        (frozen reference for the *relabelling* diagnostic), or ``None``.
+    :type src_class_ood: torch.Tensor | None
+    :param centroids: ``[K, d]`` frozen clean-CIFAR class centroids under theta_0
+        (frozen reference for the *absorption* diagnostic), or ``None``.
+    :type centroids: torch.Tensor | None
     :returns: ``dict`` with keys:
 
         * ``norm_gap_l2`` -- ``mean||g||2_id - mean||g||2_ood``.
@@ -163,6 +172,12 @@ def geometry_diagnostics(
         * ``maxcos_id``   -- mean max-cosine(features_id, W).
         * ``maxcos_ood``  -- mean max-cosine(features_ood, W).
         * ``conf_ood``    -- mean max-softmax over ``logits_ood``.
+        * ``srccos_ood``  -- mean cosine of each csOOD feature to the weight
+          vector of its theta_0-predicted class. Falling while ``maxcos_ood``
+          rises = features rotate onto *other* prototypes (relabelling).
+        * ``cdist_id`` / ``cdist_ood`` -- mean distance to the nearest frozen
+          clean-CIFAR centroid; a shrinking ``cdist_ood`` = absorption into the
+          source classes.
     :rtype: dict
     """
     norm_l2_id = features_id.norm(dim=-1)
@@ -175,10 +190,43 @@ def geometry_diagnostics(
 
     conf_ood = logits_ood.softmax(dim=-1).max(dim=-1).values
 
+    if src_class_ood is None:
+        srccos_ood = float("nan")
+    else:
+        f_norm = torch.nn.functional.normalize(features_ood, dim=-1)
+        w_norm = torch.nn.functional.normalize(W, dim=-1)
+        srccos_ood = float(
+            (f_norm * w_norm[src_class_ood.to(W.device)]).sum(dim=-1).mean().item()
+        )
+
+    if centroids is None:
+        cdist_id = cdist_ood = float("nan")
+    else:
+        c = centroids.to(features_id.device)
+        cdist_id = float(torch.cdist(features_id, c).min(dim=-1).values.mean().item())
+        cdist_ood = float(torch.cdist(features_ood, c).min(dim=-1).values.mean().item())
+
     return {
         "norm_gap_l2": float((norm_l2_id.mean() - norm_l2_ood.mean()).item()),
         "norm_gap_l1": float((norm_l1_id.mean() - norm_l1_ood.mean()).item()),
         "maxcos_id": float(maxcos_id.mean().item()),
         "maxcos_ood": float(maxcos_ood.mean().item()),
         "conf_ood": float(conf_ood.mean().item()),
+        "srccos_ood": srccos_ood,
+        "cdist_id": cdist_id,
+        "cdist_ood": cdist_ood,
     }
+
+
+def class_centroids(features: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """Per-class mean feature vectors, stacked in ascending class order.
+
+    :param features: ``[N, d]`` feature vectors.
+    :type features: torch.Tensor
+    :param labels: ``[N]`` integer class labels.
+    :type labels: torch.Tensor
+    :returns: ``[K, d]`` centroid matrix (row ``k`` = mean feature of class ``k``).
+    :rtype: torch.Tensor
+    """
+    classes = labels.unique(sorted=True)
+    return torch.stack([features[labels == c].mean(dim=0) for c in classes])

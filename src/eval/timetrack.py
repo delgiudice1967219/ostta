@@ -5,6 +5,7 @@ import torch
 from models.backbone import Backbone
 from scoring.energy import energy_score
 from eval.metrics import auroc, accuracy, geometry_diagnostics, fpr_at_tpr95, oscr
+from scoring.alignment import max_cosine
 
 
 def _diag_forward(
@@ -92,7 +93,11 @@ def _eval_theta_t(
         "oscr": oscr(scores_id, scores_ood, logits_id.argmax(dim=-1), D.y_csid),
     }
     m.update(
-        geometry_diagnostics(feat_id, feat_ood, logits_id, logits_ood, backbone.W)
+        geometry_diagnostics(
+            feat_id, feat_ood, logits_id, logits_ood, backbone.W,
+            src_class_ood=getattr(D, "src_class_ood", None),
+            centroids=getattr(D, "centroids", None),
+        )
     )
     return m
 
@@ -133,6 +138,13 @@ def run_timetrack(
     # defensively (no parameter is touched by this).
     backbone.model.train()
 
+    # theta_0 reference for the relabelling diagnostic: the source-predicted class
+    # of each diagnostic csOOD input, read once before any gradient step (same
+    # mixed-batch BN regime as every other evaluation).
+    if hasattr(D, "src_class_ood") and D.src_class_ood is None:
+        _, _, _, logits_ood0 = _diag_forward(backbone, D.x_csid, D.x_csood, batch_size)
+        D.src_class_ood = logits_ood0.argmax(dim=-1)
+
     trajectory: list[dict] = []
 
     # t = 0: BN-adapt start point, before any gradient step.
@@ -169,6 +181,10 @@ def diag_energy_norm(backbone: Backbone, D, batch_size: int = 200) -> dict:
         "energy_ood": energy_score(logits_ood).detach().cpu().numpy(),
         "norm_id": feat_id.norm(dim=-1).detach().cpu().numpy(),
         "norm_ood": feat_ood.norm(dim=-1).detach().cpu().numpy(),
+        # per-sample alignment score (t=0 snapshot = the frozen score NOVA reads;
+        # feeds the score-density figure)
+        "maxcos_id": max_cosine(feat_id, backbone.W).detach().cpu().numpy(),
+        "maxcos_ood": max_cosine(feat_ood, backbone.W).detach().cpu().numpy(),
         # full penultimate embeddings (for the t-SNE latent-space figure)
         "feat_id": feat_id.detach().cpu().numpy(),
         "feat_ood": feat_ood.detach().cpu().numpy(),

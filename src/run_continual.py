@@ -13,8 +13,7 @@ the model carries the cumulative adaptation of every earlier batch. Predictions
 and energy scores are accumulated over all batches of a corruption, scored once
 **per corruption**, and finally averaged over the corruptions.
 
-Sign conventions (a flip turns AUROC into ``1 - AUROC`` -- mirror the project's
-metric signatures exactly):
+Sign conventions (a flip turns AUROC into ``1 - AUROC``):
 
 * ``energy_score(logits) = -logsumexp`` -> HIGHER = more OOD. This is passed to
   :func:`fpr_at_tpr95` (csOOD positive, higher = OOD).
@@ -206,9 +205,7 @@ def run_continual(cfg: DictConfig, out_dir: Path) -> tuple[dict, FactorizedAdapt
             with torch.no_grad():
                 _, logits = adapter.backbone._forward(xb)
             e_ood = energy_score(logits)  # -logsumexp; HIGHER = more OOD
-            is_ood = torch.cat(
-                [torch.zeros(n_id), torch.ones(xo.shape[0])]
-            ).bool()
+            is_ood = torch.cat([torch.zeros(n_id), torch.ones(xo.shape[0])]).bool()
             preds = logits[:n_id].argmax(dim=1)
 
             e_ood_all.append(e_ood.cpu())

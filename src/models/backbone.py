@@ -11,8 +11,7 @@ RobustBench model zoo and exposes the pieces that test-time adaptation needs:
   parameters (gamma, beta), which are the only parameters adapted during TTA.
 
 BN layers are put in train mode with ``track_running_stats=False`` at load time
-so every forward pass normalises with the *current batch* statistics -- the
-BN-adapt default the whole project relies on.
+so every forward pass normalises with the *current batch* statistics.
 
 The feature hook does **not** detach the captured tensor: gradients must flow
 through ``features(x)`` into the BN affine parameters so that downstream adapters
