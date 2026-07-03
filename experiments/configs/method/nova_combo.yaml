@@ -1,0 +1,14 @@
+# nova_combo = NOVA's L1 norm penalty + UniEnt's entropy maximisation on the
+# csOOD side, weighted lam / mu. The two single-axis levers cure complementary
+# axes (L1 opens the norm gap but concedes alignment; entropy-max pins the
+# alignment but opens the gap less), so the combination targets both.
+name: nova_combo
+score: maxcos
+gmm_fit: pooled
+ood_op: l1_entmax
+label: soft
+lr: 1.0e-3
+lam: 0.03
+mu: 0.2
+warmup_K: 10
+frozen: false

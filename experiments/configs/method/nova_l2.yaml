@@ -1,0 +1,14 @@
+# nova_l2 = NOVA with the L1 penalty replaced by the SQUARED-L2 feature norm.
+# The per-sample pull d||g||_2^2/dg = 2g is parallel to g (radial), so the
+# penalty shrinks the norm the energy detector reads WITHOUT the
+# soft-thresholding rotation of L1 (which drags novel features toward their
+# best class and refunds part of the energy reduction).
+name: nova_l2
+score: maxcos
+gmm_fit: pooled
+ood_op: sq_l2_norm
+label: soft
+lr: 1.0e-3
+lam: 0.03
+warmup_K: 10
+frozen: false

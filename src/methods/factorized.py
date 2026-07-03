@@ -8,9 +8,13 @@ points in a four-axis design space:
 * ``gmm_fit in {none, perbatch, pooled}``  -- how (and whether) a 2-component
   GMM is fit to the scores to produce a soft OOD posterior. ``none`` skips the
   scorer entirely and yields ``pi_ID = 1, pi_OOD = 0`` (i.e. plain Tent).
-* ``ood_op  in {none, entropy_max, l1_norm}`` -- the OOD-regime objective:
-  ``0`` (none), ``lam * (-H(p))`` (entropy-max, ``lam`` = lambda1), or
-  ``lam * ||features||_1`` (l1_norm).
+* ``ood_op  in {none, entropy_max, l1_norm, sq_l2_norm, l1_entmax,
+  sq_l2_entmax}`` -- the OOD-regime objective: ``0`` (none), ``lam * (-H(p))``
+  (entropy-max, ``lam`` = lambda1), ``lam * ||features||_1`` (l1_norm),
+  ``lam * ||features||_2^2`` (sq_l2_norm -- the RADIAL norm penalty, which
+  shrinks without the soft-thresholding rotation of L1), or a two-axis
+  combination ``lam * ||features|| + mu * (-H(p))`` pairing a norm penalty
+  (L1 or squared L2) with entropy maximisation (l1_entmax / sq_l2_entmax).
 * ``label   in {hard, soft}`` -- whether the posterior is thresholded to
   ``{0, 1}`` (hard) or used directly as a soft weight (soft). ``label`` ALSO
   selects the normalization (see ``aggregate_loss``): ``hard`` averages each
@@ -56,6 +60,7 @@ from scoring.energy import energy_score, predictive_entropy
 from scoring.gmm import OODPosterior
 from methods.base import (
     feature_l1,
+    feature_sq_l2,
     softmax_entropy,
     softmax_mean_entropy,
     warmup_factor,
@@ -64,7 +69,7 @@ from methods.base import (
 # ---------------------------------------------------------------- axis vocabularies
 _SCORES = ("maxcos", "energy", "entropy")
 _GMM_FITS = ("none", "perbatch", "pooled")
-_OOD_OPS = ("none", "entropy_max", "l1_norm")
+_OOD_OPS = ("none", "entropy_max", "l1_norm", "sq_l2_norm", "l1_entmax", "sq_l2_entmax")
 _LABELS = ("hard", "soft")
 
 
@@ -136,9 +141,16 @@ class FactorizedAdapter:
     :type label: str
     :param lr: base Adam learning rate (before warm-up scaling).
     :type lr: float
-    :param lam: weight on the OOD term -- the ``l1_norm`` penalty, or (for
-        ``entropy_max``) the ``lambda1`` csOOD entropy-maximisation weight.
+    :param lam: weight on the OOD term -- the ``l1_norm`` / ``sq_l2_norm``
+        penalty, or (for ``entropy_max``) the ``lambda1`` csOOD
+        entropy-maximisation weight. For the two-axis ops (``l1_entmax`` /
+        ``sq_l2_entmax``) it weights the NORM part only.
     :type lam: float
+    :param mu: weight on the entropy-maximisation part of the two-axis OOD ops
+        (``l1_entmax`` / ``sq_l2_entmax``); ignored by every other ``ood_op``.
+        ``0.0`` (the default) makes the two-axis ops degenerate to their pure
+        norm penalty.
+    :type mu: float
     :param marginal_lambda: weight (``lambda2``) on the marginal anti-collapse
         term ``H(f-bar)``, subtracted from the loss. ``0.0`` (the default)
         recovers the plain two-term objective (Tent / NOVA).
@@ -178,6 +190,7 @@ class FactorizedAdapter:
         label: str = "soft",
         lr: float = 1e-3,
         lam: float = 0.03,
+        mu: float = 0.0,
         marginal_lambda: float = 0.0,
         warmup_K: int = 10,
         reliability_gate: bool = False,
@@ -209,6 +222,7 @@ class FactorizedAdapter:
         self.label = label
         self.base_lr = lr
         self.lam = lam
+        self.mu = mu
         self.marginal_lambda = marginal_lambda
         self.warmup_K = warmup_K
         self.reliability_gate = reliability_gate
@@ -350,6 +364,16 @@ class FactorizedAdapter:
             return self.lam * (-softmax_entropy(logits))  # lambda1 * maximise OOD entropy
         if self.ood_op == "l1_norm":
             return self.lam * feature_l1(features)       # suppress norm inflation
+        if self.ood_op == "sq_l2_norm":
+            # Radial suppression: the per-sample pull 2*lam*g is parallel to g,
+            # so the norm shrinks with no rotation toward the class weights.
+            return self.lam * feature_sq_l2(features)
+        if self.ood_op == "l1_entmax":
+            # Two-axis op: norm suppression + entropy maximisation (the two
+            # single-axis levers cure complementary axes -- gap vs alignment).
+            return self.lam * feature_l1(features) + self.mu * (-softmax_entropy(logits))
+        if self.ood_op == "sq_l2_entmax":
+            return self.lam * feature_sq_l2(features) + self.mu * (-softmax_entropy(logits))
         raise ValueError(f"unknown ood_op {self.ood_op!r}")  # pragma: no cover
 
     def _components(

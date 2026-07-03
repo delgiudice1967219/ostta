@@ -1,0 +1,13 @@
+# nova_l2_combo = radial (squared-L2) norm suppression + entropy maximisation
+# on the csOOD side: the fully corrected lever -- shrink without rotating
+# (sq_l2) AND actively pin the alignment (entropy-max), weighted lam / mu.
+name: nova_l2_combo
+score: maxcos
+gmm_fit: pooled
+ood_op: sq_l2_entmax
+label: soft
+lr: 1.0e-3
+lam: 0.03
+mu: 0.2
+warmup_K: 10
+frozen: false

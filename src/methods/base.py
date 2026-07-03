@@ -10,6 +10,8 @@ Small, dependency-free helpers used by the factorized adapter:
   scalar ``H(f-bar)`` that an objective can maximise to discourage the batch
   from collapsing onto one class (the marginal anti-collapse term).
 * :func:`feature_l1` -- per-sample feature L1 norm (the NOVA OOD penalty).
+* :func:`feature_sq_l2` -- per-sample squared L2 feature norm (the radial
+  variant of the penalty: shrinks without rotating).
 * :func:`warmup_factor` -- a ramp in ``[0, 1]`` used to scale the learning rate
   during the first ``K`` adaptation steps.
 """
@@ -52,8 +54,26 @@ def feature_l1(features: torch.Tensor) -> torch.Tensor:
     """Per-sample L1 norm of the penultimate features, shape ``[N]``.
 
     Minimising this suppresses feature-norm inflation, the NOVA OOD penalty.
+    On the non-negative (post-ReLU, pooled) features its per-sample pull
+    ``d||g||_1/dg = sign(g)`` is a uniform subtraction over the active support
+    --- soft-thresholding --- which kills small coordinates first and thereby
+    ROTATES the surviving direction toward the dominant (class-aligned)
+    coordinates while it shrinks. :func:`feature_sq_l2` is the radial
+    alternative without that angular side effect.
     """
     return features.abs().sum(dim=-1)
+
+
+def feature_sq_l2(features: torch.Tensor) -> torch.Tensor:
+    """Per-sample squared L2 norm of the penultimate features, shape ``[N]``.
+
+    Minimising this shrinks the feature radially: the per-sample pull
+    ``d||g||_2^2/dg = 2g`` is parallel to ``g`` itself, so the penalty
+    suppresses the norm the energy detector reads without moving the feature's
+    direction (no soft-thresholding, hence no rotation toward the class
+    weights).
+    """
+    return features.pow(2).sum(dim=-1)
 
 
 def warmup_factor(t: int, K: int) -> float:
