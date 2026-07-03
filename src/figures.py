@@ -77,6 +77,29 @@ def _traj(corruption="gaussian_noise", seed=0) -> dict:
     return out
 
 
+def _traj_bands(corruption, methods, key):
+    """method -> (t, mean, std) for one metric, aggregated over all available seeds.
+
+    Loads every ``{method}_{corruption}_s*`` timetrack, stacks the per-seed arrays
+    on the shared ``t`` grid, and returns the across-seed mean and std so a figure
+    can draw a confidence band. Methods/seeds with no artifact are skipped.
+    """
+    out = {}
+    for m in methods:
+        hits = sorted(glob.glob(f"{MR}/bench/{m}_{corruption}_s*/timetrack.npz"))
+        arrs, t_ref = [], None
+        for h in hits:
+            d = dict(np.load(h))
+            if key not in d:
+                continue
+            arrs.append(d[key]); t_ref = d["t"]
+        if arrs:
+            L = min(len(a) for a in arrs)                 # guard ragged lengths
+            stack = np.stack([a[:L] for a in arrs])
+            out[m] = (t_ref[:L], stack.mean(0), stack.std(0))
+    return out
+
+
 def _finish(fig, name):
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     png = FIG_DIR / f"{name}.png"
@@ -90,35 +113,46 @@ def _finish(fig, name):
 #  figures
 # --------------------------------------------------------------------------- #
 def fig_geometry(corruption="gaussian_noise") -> Path:
-    """The diagnosis over adaptation step t: feature-norm gap, csOOD confidence, AUROC."""
-    traj = _traj(corruption)
-    if not traj:
-        raise FileNotFoundError(f"no timetrack under {MR}/bench/*_{corruption}_s0/")
-    # Single-column, 2 compact panels: the mechanism (norm gap) and the outcome
-    # (AUROC). The confidence story lives in the text + the distributions figure.
+    """The diagnosis over adaptation step t, as a 2x2 panel that fits one column:
+    the norm gap and novel-input alignment (the two factors of the logit), the
+    novel-input confidence they induce, and the outcome (detection AUROC). Lines
+    are the across-seed mean with a +/-std band. Tent rotates novel features onto
+    the known classes and inflates their confidence, collapsing detection even as
+    the norm gap widens; NOVA opens the gap widest and detects best. UniEnt is
+    dropped in favour of UniEnt+ (near-identical behaviour, fewer lines)."""
+    # One representative baseline (UniEnt+, the soft-split analogue of NOVA's rule)
+    # instead of both UniEnt variants, which overlap.
+    order = ["bnadapt", "tent", "unient_plus", "nova"]
     panels = [("norm_gap_l2", "norm gap"),
+              ("maxcos_ood",  "novel align."),
+              ("conf_ood",    "novel conf."),
               ("auroc",       "AUROC")]
+    if not _traj_bands(corruption, order, "auroc"):
+        raise FileNotFoundError(f"no timetrack under {MR}/bench/*_{corruption}_s*/")
     plt.rcParams.update({"font.size": 9, "font.family": "sans-serif"})
-    fig, axes = plt.subplots(1, 2, figsize=(3.5, 1.08))
-    for ax, (key, ylab) in zip(axes, panels):
-        for m in ORDER:
-            if m in traj:
+    fig, axes = plt.subplots(2, 2, figsize=(3.3, 2.9))
+    for ax, (key, ylab) in zip(axes.ravel(), panels):
+        bands = _traj_bands(corruption, order, key)
+        for m in order:
+            if m in bands:
+                t, mu, sd = bands[m]
                 s = STYLE[m]
-                ax.plot(traj[m]["t"], traj[m][key], color=s["color"], ls=s["ls"],
-                        lw=s["lw"], zorder=s["z"])
-        ax.set_xlabel("step  t", fontsize=8.5)
-        ax.set_ylabel(ylab, fontsize=8.5)
+                ax.fill_between(t, mu - sd, mu + sd, color=s["color"],
+                                alpha=0.18, lw=0, zorder=s["z"])
+                ax.plot(t, mu, color=s["color"], ls=s["ls"], lw=s["lw"], zorder=s["z"])
+        ax.set_xlabel("step  t", fontsize=8)
+        ax.set_ylabel(ylab, fontsize=8)
         ax.grid(True, color="#e8eaef", lw=0.7)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
         ax.margins(x=0.02)
-        ax.tick_params(labelsize=7.5)
+        ax.tick_params(labelsize=7)
     handles = [plt.Line2D([0], [0], color=STYLE[m]["color"], ls=STYLE[m]["ls"],
-                          lw=STYLE[m]["lw"], label=STYLE[m]["label"]) for m in ORDER]
-    fig.legend(handles=handles, loc="lower center", ncol=5, frameon=False,
-               bbox_to_anchor=(0.5, -0.04), fontsize=6.6, columnspacing=1.0,
+                          lw=STYLE[m]["lw"], label=STYLE[m]["label"]) for m in order]
+    fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False,
+               bbox_to_anchor=(0.5, -0.03), fontsize=6.6, columnspacing=1.0,
                handlelength=1.4)
-    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
     return _finish(fig, "fig_geometry")
 
 
@@ -138,19 +172,21 @@ def fig_ablation() -> Path:
     fig, ax = plt.subplots(figsize=(5.4, 3.8))
     bars = ax.bar(names, vals, yerr=errs, color=cols, width=0.62, zorder=3,
                   capsize=4, error_kw=dict(lw=1.3, ecolor="#333"))
-    ax.axhline(tent_mean, color="#c0392b", ls=":", lw=1.5, zorder=2,
-               label=f"Tent {tent_mean:.3f}")
+    # Tent reference (no detector, no split): a labelled band + line, drawn well
+    # inside the frame so it reads clearly against the three lever bars.
+    ax.axhspan(0.58, tent_mean, color="#c0392b", alpha=0.06, zorder=0)
+    ax.axhline(tent_mean, color="#c0392b", ls="--", lw=2.0, zorder=2)
+    ax.text(len(names) - 0.5, tent_mean + 0.004,
+            f"Tent (no detector)  {tent_mean:.3f}", ha="right", va="bottom",
+            fontsize=9.5, color="#c0392b", fontweight="bold")
     for b, v, e in zip(bars, vals, errs):
         ax.text(b.get_x() + b.get_width() / 2, v + e + 0.004, f"{v:.3f}",
                 ha="center", va="bottom", fontsize=10.5, fontweight="bold")
-    ax.set_ylim(0.62, 0.94)
+    ax.set_ylim(0.58, 0.94)
     ax.set_ylabel("novelty-detection AUROC")
-    ax.set_title("Loss applied to novel inputs\n(detection rule held fixed; 15 corruptions, 3 seeds)",
-                 fontsize=10.5)
     ax.grid(True, axis="y", color="#e8eaef", lw=0.8, zorder=0)
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
-    ax.legend(frameon=False, loc="lower right", fontsize=9.5)
     fig.tight_layout()
     return _finish(fig, "fig_ablation")
 
@@ -178,8 +214,10 @@ def fig_distributions(corruption="gaussian_noise") -> Path:
             ax.hist(idv, bins=bins, color=ID_C, alpha=0.6, label="known (csID)", density=True)
             ax.hist(oodv, bins=bins, color=OOD_C, alpha=0.6, label="novel (csOOD)", density=True)
             if i == 0:
-                ax.set_title(STYLE[m]["label"], fontsize=11.5,
-                             color=STYLE[m]["color"], fontweight="bold")
+                # Neutral title colour: the bar colours already key csID/csOOD,
+                # so a coloured method title would clash with the population legend.
+                ax.set_title(f"under {STYLE[m]['label']}", fontsize=11.5,
+                             color="#222", fontweight="bold")
             if j == 0:
                 ax.set_ylabel(ylab, fontsize=9.8)
             ax.set_yticks([])
@@ -234,7 +272,7 @@ def fig_tsne(corruption="gaussian_noise", n=900, seed=0) -> Path:
 
     # (title, method-key, csID feats, csOOD feats, csID labels)
     panels = [
-        ("BN-adapt (source)", "bnadapt", nova["feat_id_t0"], nova["feat_ood_t0"], nova["y_id"]),
+        ("BN-adapt (t=0)", "bnadapt", nova["feat_id_t0"], nova["feat_ood_t0"], nova["y_id"]),
         ("Tent",              "tent",    tent["feat_id_tT"], tent["feat_ood_tT"], tent["y_id"]),
         ("UniEnt",            "unient",  unient["feat_id_tT"], unient["feat_ood_tT"], unient["y_id"]),
         ("NOVA",              "nova",    nova["feat_id_tT"], nova["feat_ood_tT"], nova["y_id"]),
@@ -261,10 +299,77 @@ def fig_tsne(corruption="gaussian_noise", n=900, seed=0) -> Path:
             sp.set_edgecolor("#cccccc")
     axes.ravel()[0].legend(loc="upper right", fontsize=8.5, frameon=True,
                            markerscale=1.5)
-    fig.suptitle("Latent space (t-SNE): csID coloured by class (red→blue), csOOD in yellow",
-                 fontsize=12.5, y=0.995)
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.tight_layout()
     return _finish(fig, "fig_tsne")
+
+
+def fig_absorption(corruption="gaussian_noise") -> Path:
+    """Relabelling & absorption diagnostics over adaptation (App. figure).
+
+    Two panels from the absorb reruns: the csOOD cosine to each input's
+    theta_0-predicted class (falls under Tent while max-cosine rises = features
+    rotate onto *other* prototypes: relabelling) and the csOOD distance to the
+    nearest frozen clean-CIFAR centroid (falls under Tent = absorption into the
+    source classes; NOVA halts it)."""
+    traj = {}
+    for m in ORDER:
+        hits = glob.glob(f"{MR}/absorb/{m}_{corruption}_s0/timetrack.npz")
+        if hits:
+            traj[m] = dict(np.load(hits[0]))
+    if not traj:
+        raise FileNotFoundError(f"no timetrack under {MR}/absorb/*_{corruption}_s0/")
+    panels = [("srccos_ood", "novel src-cos"),
+              ("cdist_ood",  "novel cdist")]
+    plt.rcParams.update({"font.size": 9, "font.family": "sans-serif"})
+    fig, axes = plt.subplots(1, 2, figsize=(5.0, 1.55))
+    for ax, (key, ylab) in zip(axes, panels):
+        for m in ORDER:
+            if m in traj and key in traj[m]:
+                s = STYLE[m]
+                ax.plot(traj[m]["t"], traj[m][key], color=s["color"], ls=s["ls"],
+                        lw=s["lw"], zorder=s["z"])
+        ax.set_xlabel("step  t", fontsize=8.5)
+        ax.set_ylabel(ylab, fontsize=8.5)
+        ax.grid(True, color="#e8eaef", lw=0.7)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        ax.margins(x=0.02)
+        ax.tick_params(labelsize=7.5)
+    handles = [plt.Line2D([0], [0], color=STYLE[m]["color"], ls=STYLE[m]["ls"],
+                          lw=STYLE[m]["lw"], label=STYLE[m]["label"]) for m in ORDER]
+    fig.legend(handles=handles, loc="lower center", ncol=5, frameon=False,
+               bbox_to_anchor=(0.5, -0.06), fontsize=6.6, columnspacing=1.0,
+               handlelength=1.4)
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    return _finish(fig, "fig_absorption")
+
+
+def fig_score_density(corruption="gaussian_noise") -> Path:
+    """Frozen max-cosine score densities at t=0 (App. figure): the score NOVA's
+    detection rule reads already separates csID from csOOD before any adaptation
+    -- the observation that motivates the score choice."""
+    hits = glob.glob(f"{MR}/absorb/*_{corruption}_s0/dump.npz")
+    if not hits:
+        raise FileNotFoundError(f"no dump.npz under {MR}/absorb/*_{corruption}_s0/")
+    d = dict(np.load(hits[0]))
+    id_s, ood_s = d["maxcos_id_t0"], d["maxcos_ood_t0"]
+
+    plt.rcParams.update({"font.size": 10, "font.family": "sans-serif"})
+    fig, ax = plt.subplots(figsize=(4.6, 2.4))
+    lo = float(min(id_s.min(), ood_s.min())); hi = float(max(id_s.max(), ood_s.max()))
+    bins = np.linspace(lo, hi, 40)
+    ax.hist(id_s, bins=bins, color=ID_C, alpha=0.6, label="known (csID)", density=True)
+    ax.hist(ood_s, bins=bins, color=OOD_C, alpha=0.6, label="novel (csOOD)", density=True)
+    ax.axvline(float(np.mean(id_s)), color=ID_C, ls=":", lw=1.2)
+    ax.axvline(float(np.mean(ood_s)), color=OOD_C, ls=":", lw=1.2)
+    ax.set_xlabel("frozen max-cosine score  $s(x)$")
+    ax.set_yticks([])
+    ax.grid(True, axis="x", color="#eef0f4", lw=0.7)
+    for sp in ("top", "right", "left"):
+        ax.spines[sp].set_visible(False)
+    ax.legend(frameon=False, fontsize=9)
+    fig.tight_layout()
+    return _finish(fig, "fig_score_density")
 
 
 def fig_pooling() -> Path:
@@ -294,7 +399,8 @@ def fig_pooling() -> Path:
 
 
 if __name__ == "__main__":
-    for fn in (fig_geometry, fig_ablation, fig_distributions, fig_openness, fig_pooling):
+    for fn in (fig_geometry, fig_ablation, fig_distributions, fig_openness,
+               fig_pooling, fig_tsne, fig_absorption, fig_score_density):
         try:
             print("wrote", fn())
         except Exception as e:  # keep going; report which figure failed
