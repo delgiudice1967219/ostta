@@ -10,10 +10,6 @@
 set -euo pipefail
 cd /leonardo_work/IscrC_AIM/open-set-tta-dlai
 
-# NOVA/maxcos own lambda-curve on ALL 15 corruptions x 3 seeds, to trace its
-# accuracy/AUROC trade-off and compare entropy vs maxcos at MATCHED accuracy.
-# lam=0.03 (acc 0.845) already exists in multirun/bench; here 0.05/0.075/0.1 to
-# push accuracy down toward the entropy score's ~0.833 cap. One lam per GPU lane.
 ALLC=gaussian_noise,shot_noise,impulse_noise,defocus_blur,glass_blur,motion_blur,zoom_blur,snow,frost,fog,brightness,contrast,elastic_transform,pixelate,jpeg_compression
 RUN="env -u VIRTUAL_ENV uv run --no-sync python src/run.py -m"
 COMMON="method=nova corruption=$ALLC seed=0,1,2 device=cuda hydra.sweep.dir=multirun/nova_lambda"

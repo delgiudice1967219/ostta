@@ -10,10 +10,6 @@
 set -euo pipefail
 cd /leonardo_work/IscrC_AIM/open-set-tta-dlai
 
-# Matched-accuracy test for the entropy score: entropy_l1 detects +4.8 AUROC over
-# maxcos at lam=0.03 but costs ~1.9 acc. Sweep lam down (higher acc) to find the
-# point matching NOVA's ~84.5% acc, then compare AUROC at matched accuracy.
-# One lam per GPU lane, 15 corruptions x 3 seeds each.
 ALLC=gaussian_noise,shot_noise,impulse_noise,defocus_blur,glass_blur,motion_blur,zoom_blur,snow,frost,fog,brightness,contrast,elastic_transform,pixelate,jpeg_compression
 RUN="env -u VIRTUAL_ENV uv run --no-sync python src/run.py -m"
 COMMON="method=cell_entropy_l1 corruption=$ALLC seed=0,1,2 device=cuda hydra.sweep.dir=multirun/entropy_lambda"

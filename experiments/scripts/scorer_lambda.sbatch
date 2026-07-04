@@ -10,16 +10,11 @@
 set -euo pipefail
 cd /leonardo_work/IscrC_AIM/open-set-tta-dlai
 
-# E5: frozen vs adapting scorer. NOVA (frozen, scorer_frozen=true) is run in
-# A1/A2; here the adapting-scorer variant on a 4-corruption subset, 3 seeds.
 env -u VIRTUAL_ENV uv run --no-sync python src/run.py -m \
   method=cell_scorer_adapting corruption=gaussian_noise,fog,snow,pixelate seed=0,1,2 \
   device=cuda hydra.sweep.dir=multirun/scorer \
   'hydra.sweep.subdir=${method.name}_${corruption}_s${seed}'
 
-# E6: lambda sensitivity for NOVA (0.03 is run in A1/A2 as nova) on 3 corruptions, 3 seeds.
-# 'lam' is nested under method (no top-level key), so override 'method.lam' (it
-# exists in the default method tent too, so a plain multirun override is fine).
 env -u VIRTUAL_ENV uv run --no-sync python src/run.py -m \
   method=nova corruption=gaussian_noise,fog,snow method.lam=0.01,0.1,0.3 seed=0,1,2 \
   device=cuda hydra.sweep.dir=multirun/lambda \

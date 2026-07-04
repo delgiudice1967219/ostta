@@ -12,9 +12,6 @@ set -euo pipefail
 cd /leonardo_work/IscrC_AIM/open-set-tta-dlai
 mkdir -p results
 
-# Pooling dynamics (GMM fit quality: held-out NLL + split-acc + stability),
-# pooled vs per-batch, at a STARVED batch size (N=20 -> 10 csID + 10 csOOD per
-# GMM fit) and the NATURAL one (N=200). seed=0 reuses the SVHN-C caches.
 env -u VIRTUAL_ENV uv run --no-sync python src/eval/posterior_track.py \
   corruption=gaussian_noise device=cuda 'N=20'  out_dir=results/dyn_N20
 env -u VIRTUAL_ENV uv run --no-sync python src/eval/posterior_track.py \

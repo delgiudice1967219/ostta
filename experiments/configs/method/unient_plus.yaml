@@ -1,8 +1,7 @@
 # UniEnt+: as UniEnt (maxcos score -> per-batch GMM -> entropy_max OOD op, with
 # the marginal anti-collapse term) but with SOFT, posterior-weighted ID/OOD
-# contributions averaged over the FULL batch instead of a hard per-subset split
-# -- reduces the noise from hard data partitioning. lambda1=lam=0.2,
-# marginal_lambda=lambda2=0.2. Adam lr=1e-3, K=10 warm-up.
+# contributions averaged over the FULL batch instead of a hard per-subset split. 
+# lambda1=lam=0.2, marginal_lambda=lambda2=0.2. Adam lr=1e-3, K=10 warm-up.
 name: unient_plus
 score: maxcos
 gmm_fit: perbatch
@@ -11,6 +10,6 @@ label: soft
 lr: 1.0e-3
 lam: 0.2
 marginal_lambda: 0.2
-warmup_K: 0            # faithful to the paper/code: constant lr=1e-3, NO warm-up
+warmup_K: 0            
 reliability_gate: true  # OSTTA gate: entropy-min only on csID whose adapted conf >= frozen-source conf
 frozen: false

@@ -1,4 +1,4 @@
-# unient_energy = UniEnt with an energy filter (Phase-2 finding; read WITH the energy/eval coupling caveat).
+# unient_energy = UniEnt with an energy filter.
 name: unient_energy
 score: energy
 gmm_fit: perbatch

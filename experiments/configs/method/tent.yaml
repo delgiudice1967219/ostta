@@ -1,8 +1,6 @@
-# Tent (paper-faithful baseline for the continual benchmark): entropy
-# minimisation on the adapted model + a marginal anti-collapse term
-# -lambda2*H(f-bar) (marginal_lambda=0.2) that the source paper applies to every
-# method (tent.py: `loss -= alpha[0]*softmax_mean_entropy`). Adam lr=1e-3,
-# CONSTANT LR (no warm-up; warmup_K=0), per the paper/code.
+# Tent: entropy minimization on the adapted model + a marginal anti-collapse term
+# -lambda2*H(f-bar) (marginal_lambda=0.2). Adam lr=1e-3,
+# constant LR (no warm-up; warmup_K=0).
 name: tent
 score: null
 gmm_fit: none

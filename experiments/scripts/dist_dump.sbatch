@@ -10,8 +10,6 @@
 set -euo pipefail
 cd /leonardo_work/IscrC_AIM/open-set-tta-dlai
 
-# E7: per-sample energy + feature-norm dump for the distribution figure.
-# NOVA vs PLAIN Tent (the diagnosis uses plain Tent), gaussian_noise + snow, seed 0.
 env -u VIRTUAL_ENV uv run --no-sync python src/run.py -m \
   method=nova corruption=gaussian_noise,snow seed=0 dump_per_sample=true device=cuda \
   hydra.sweep.dir=multirun/dist 'hydra.sweep.subdir=${method.name}_${corruption}'

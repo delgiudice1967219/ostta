@@ -1,6 +1,5 @@
 # NOVA but with the OOD score read from the ADAPTING model (scorer_frozen=false)
-# instead of the frozen theta_0 -- isolates NOVA's "frozen scorer" design choice
-# (E5 ablation). Everything else matches nova.yaml.
+# instead of the frozen theta_0.
 name: scorer_adapting
 score: maxcos
 gmm_fit: pooled

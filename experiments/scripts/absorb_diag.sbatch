@@ -10,13 +10,6 @@
 set -euo pipefail
 cd /leonardo_work/IscrC_AIM/open-set-tta-dlai
 
-# Absorption-diagnostics rerun (paper appendix): the bench trajectories extended
-# with the theta_0-referenced quantities srccos_ood / cdist_id / cdist_ood
-# (relabelling + centroid absorption) and a
-# per-sample frozen max-cosine dump at t=0 (score-density figure). Per-corruption
-# protocol, gaussian_noise, seed 0, bench-faithful method settings (see
-# bench_seeds.sbatch for the fidelity notes). Writes to multirun/absorb -- the
-# bench artifacts backing the paper's current numbers are untouched.
 SUB='${method.name}_${corruption}_s${seed}'
 
 env -u VIRTUAL_ENV uv run --no-sync python src/run.py -m \

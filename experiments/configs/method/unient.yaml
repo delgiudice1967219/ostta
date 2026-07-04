@@ -11,6 +11,6 @@ label: hard
 lr: 1.0e-3
 lam: 0.2
 marginal_lambda: 0.2
-warmup_K: 0            # faithful to the paper/code: constant lr=1e-3, NO warm-up
+warmup_K: 0            
 reliability_gate: true  # OSTTA gate: entropy-min only on csID whose adapted conf >= frozen-source conf
 frozen: false

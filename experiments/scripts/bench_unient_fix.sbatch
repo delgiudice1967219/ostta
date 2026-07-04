@@ -11,11 +11,6 @@
 set -euo pipefail
 cd /leonardo_work/IscrC_AIM/open-set-tta-dlai
 
-# Rerun of the bench UniEnt/UniEnt+ part that failed under the plain-override bug
-# (multirun validates 'method.reliability_gate' against the default method tent,
-# which lacks the key -> use '++'). bnadapt/nova/tent already completed in
-# bench_seeds (48084208); SVHN-C caches for seeds 0,1,2 are warm. Per-corruption
-# protocol => gateless UniEnt. Writes into the same multirun/bench tree.
 CORRUPTIONS=(gaussian_noise shot_noise impulse_noise defocus_blur glass_blur \
   motion_blur zoom_blur snow frost fog brightness contrast elastic_transform \
   pixelate jpeg_compression)
