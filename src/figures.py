@@ -407,9 +407,105 @@ def fig_pooling() -> Path:
     return _finish(fig, "fig_pooling")
 
 
+def _lambda_curve(dirs, method_name):
+    """{lam: {metric:(mean, seed-stable std)}} for one method across dirs.
+
+    Aggregates seed-stably (mean over the 15 corruptions per seed, then mean/std
+    over the 3 seeds) so the error bar is the seed stability reported in Table 1,
+    not the much larger across-corruption spread."""
+    # lam -> seed -> metric -> [per-corruption values]
+    perseed = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    for d in dirs:
+        for sj in glob.glob(f"{MR}/{d}/**/summary.json", recursive=True):
+            p = Path(sj); cfgp = p.parent / ".hydra" / "config.yaml"
+            if not cfgp.exists():
+                continue
+            c = yaml.safe_load(cfgp.read_text()); m = c.get("method", {})
+            if m.get("name") != method_name or m.get("lam") is None:
+                continue
+            s = json.loads(p.read_text())
+            if "auroc" not in s:
+                continue
+            lam = float(m["lam"]); seed = c.get("seed")
+            for k in ("acc", "auroc", "oscr"):
+                perseed[lam][seed][k].append(s[k]["tT"])
+    out = {}
+    for lam, seeds in perseed.items():
+        out[lam] = {}
+        for k in ("acc", "auroc", "oscr"):
+            means = [float(np.mean(seeds[sd][k])) for sd in seeds if seeds[sd][k]]
+            out[lam][k] = (float(np.mean(means)),
+                           float(np.std(means)) if len(means) > 1 else 0.0)
+    return out
+
+
+def fig_lambda() -> Path:
+    """NOVA's penalty strength lambda trades csID accuracy for detection AUROC
+    (all 15 corruptions x 3 seeds, seed-stable error bars). Twin y-axes."""
+    cur = _lambda_curve(["bench", "nova_lambda"], "nova")
+    lams = sorted(cur)
+    acc  = [cur[l]["acc"][0] * 100 for l in lams]
+    accs = [cur[l]["acc"][1] * 100 for l in lams]
+    au   = [cur[l]["auroc"][0] * 100 for l in lams]
+    aus  = [cur[l]["auroc"][1] * 100 for l in lams]
+    plt.rcParams.update({"font.size": 10, "font.family": "sans-serif"})
+    fig, ax1 = plt.subplots(figsize=(4.6, 3.2))
+    ax2 = ax1.twinx()
+    ax1.errorbar(lams, acc, yerr=accs, color=ID_C, marker="o", lw=2.0, capsize=3,
+                 label="csID accuracy")
+    ax2.errorbar(lams, au, yerr=aus, color=OOD_C, marker="s", lw=2.0, capsize=3,
+                 label="detection AUROC")
+    # Zoomed-out ranges so the (small) seed-stable error bars read as small.
+    ax1.set_ylim(81, 87); ax2.set_ylim(86, 99)
+    ax1.set_xlabel("penalty strength  $\\lambda$")
+    ax1.set_ylabel("csID accuracy", color=ID_C)
+    ax2.set_ylabel("detection AUROC", color=OOD_C)
+    ax1.tick_params(axis="y", labelcolor=ID_C)
+    ax2.tick_params(axis="y", labelcolor=OOD_C)
+    ax1.spines["top"].set_visible(False); ax2.spines["top"].set_visible(False)
+    ax1.grid(True, axis="x", color="#eef0f4", lw=0.7)
+    h1, l1 = ax1.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
+    fig.legend(h1 + h2, l1 + l2, frameon=False, loc="lower center", ncol=2,
+               bbox_to_anchor=(0.5, -0.01), fontsize=8.5)
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    return _finish(fig, "fig_lambda")
+
+
+def fig_tradeoff() -> Path:
+    """csID accuracy vs detection AUROC as lambda is swept, for the two frozen
+    scores (all 15 corruptions x 3 seeds). Max-cosine's frontier dominates the
+    entropy score's -- higher AUROC at every matched accuracy, and it reaches
+    accuracies the entropy split cannot."""
+    nova = _lambda_curve(["bench", "nova_lambda"], "nova")
+    ent  = _lambda_curve(["entropy_lambda", "rule_swap"], "entropy_l1")
+    plt.rcParams.update({"font.size": 10, "font.family": "sans-serif"})
+    fig, ax = plt.subplots(figsize=(4.8, 3.5))
+    for cur, color, marker, label, dy in [
+            (nova, "#3a3f9c", "o", "max-cosine (NOVA)",  6),
+            (ent,  "#d98a2b", "s", "entropy score",     -13)]:
+        lams = sorted(cur)
+        xs = [cur[l]["acc"][0] * 100 for l in lams]
+        ys = [cur[l]["auroc"][0] * 100 for l in lams]
+        ax.plot(xs, ys, color=color, marker=marker, lw=2.2, ms=6, label=label, zorder=3)
+        for l, x, y in zip(lams, xs, ys):
+            ax.annotate(f"$\\lambda{{=}}{l:g}$", (x, y), textcoords="offset points",
+                        xytext=(4, dy), fontsize=6.6, color=color)
+    ax.axvline(83.3, color="#cccccc", ls=":", lw=0.9, zorder=1)
+    ax.set_xlim(82.2, 85.0); ax.set_ylim(86.5, 96.5)
+    ax.set_xlabel("csID accuracy")
+    ax.set_ylabel("detection AUROC")
+    ax.grid(True, color="#eef0f4", lw=0.7)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.legend(frameon=False, loc="upper right", fontsize=9)
+    fig.tight_layout()
+    return _finish(fig, "fig_tradeoff")
+
+
 if __name__ == "__main__":
     for fn in (fig_geometry, fig_ablation, fig_distributions, fig_openness,
-               fig_pooling, fig_tsne, fig_absorption, fig_score_density):
+               fig_pooling, fig_tsne, fig_absorption, fig_score_density,
+               fig_lambda, fig_tradeoff):
         try:
             print("wrote", fn())
         except Exception as e:  # keep going; report which figure failed
