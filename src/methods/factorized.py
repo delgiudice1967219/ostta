@@ -66,7 +66,6 @@ from methods.base import (
     warmup_factor,
 )
 
-# ---------------------------------------------------------------- axis vocabularies
 _SCORES = ("maxcos", "energy", "entropy")
 _GMM_FITS = ("none", "perbatch", "pooled")
 _OOD_OPS = ("none", "entropy_max", "l1_norm", "sq_l2_norm", "l1_entmax", "sq_l2_entmax")
@@ -239,9 +238,6 @@ class FactorizedAdapter:
         self.optimizer: torch.optim.Optimizer | None = None
         if not self.frozen:
             if self.gmm_fit != "none":
-                # Default: a frozen theta_0 deepcopy (stationary score). With
-                # scorer_frozen=False the score is read from the live adapting
-                # backbone instead (the frozen-vs-adapting ablation).
                 if self.scorer_frozen:
                     self.scorer = self._build_frozen_scorer(backbone)
                 else:
@@ -251,11 +247,8 @@ class FactorizedAdapter:
             self.optimizer = torch.optim.Adam(
                 self.backbone.bn_affine_params(), lr=self.base_lr
             )
-
-        # 1-indexed adaptation step counter (incremented at the top of `.step`).
         self.t = 0
 
-    # ------------------------------------------------------------------ scorer setup
     @staticmethod
     def _build_frozen_scorer(backbone: Backbone) -> Backbone:
         """Snapshot the backbone at theta_0 as a frozen, no-grad scorer.
@@ -266,12 +259,11 @@ class FactorizedAdapter:
         and stays stationary across steps. The scorer is never updated.
         """
         scorer_model = copy.deepcopy(backbone.model)
-        scorer_model.train()              # BN uses current-batch stats
+        scorer_model.train()  # BN uses current-batch stats
         scorer_model.requires_grad_(False)
         scorer = Backbone(scorer_model, device=backbone.device)
         return scorer
 
-    # ------------------------------------------------------------------ detector reset
     def reset_detector(self) -> None:
         """Clear the pooled OOD detector at a corruption boundary.
 
@@ -284,25 +276,18 @@ class FactorizedAdapter:
         if self.posterior is not None:
             self.posterior.reset()
 
-    # --------------------------------------------------------------------- posterior
     def _frozen_score(self, batch_x: torch.Tensor) -> torch.Tensor:
         """Compute the chosen score from the FROZEN scorer, no grad. Shape ``[N]``."""
         assert self.scorer is not None
         with torch.no_grad():
             features, logits = self.scorer._forward(batch_x)
-            # The OOD GMM labels its higher-mean component as ID, so every score
-            # fed to it must be oriented higher = more ID. maxcos already is
-            # (aligned features score high). energy (= -logsumexp) and predictive
-            # entropy are natively LOWER for confident/ID samples, so we negate
-            # them here -- otherwise ID samples land in the lower-mean component
-            # and get labelled OOD (backwards).
             if self.score == "maxcos":
-                return max_cosine(features, self.scorer.W)   # higher = more ID
+                return max_cosine(features, self.scorer.W)  # higher = more ID
             if self.score == "energy":
-                return -energy_score(logits)                 # -> higher = more ID
+                return -energy_score(logits)  # higher = more ID
             if self.score == "entropy":
-                return -predictive_entropy(logits)           # -> higher = more ID
-        raise ValueError(f"unknown score {self.score!r}")  # pragma: no cover
+                return -predictive_entropy(logits)  # higher = more ID
+        raise ValueError(f"unknown score {self.score!r}")
 
     def _reliability_gate(
         self, batch_x: torch.Tensor, logits: torch.Tensor
@@ -319,16 +304,18 @@ class FactorizedAdapter:
         """
         assert self.scorer is not None
         with torch.no_grad():
-            _, logits0 = self.scorer._forward(batch_x)        # frozen theta_0 source
+            _, logits0 = self.scorer._forward(batch_x)  # frozen theta_0 source
             probs0 = logits0.softmax(dim=-1)
-            values0, indices0 = probs0.max(dim=-1)            # source max prob + argmax
-            probs = logits.softmax(dim=-1)                    # adapted
+            values0, indices0 = probs0.max(dim=-1)  # source max prob + argmax
+            probs = logits.softmax(dim=-1)  # adapted
             values = probs.detach()[
                 torch.arange(probs.shape[0], device=probs.device), indices0
-            ]                                                 # adapted prob at the source argmax
-            return (values >= values0).to(logits.dtype)       # [N], detached {0,1}
+            ]  # adapted prob at the source argmax
+            return (values >= values0).to(logits.dtype)  # [N], detached {0,1}
 
-    def _ood_weight(self, batch_x: torch.Tensor, device_ref: torch.Tensor) -> torch.Tensor:
+    def _ood_weight(
+        self, batch_x: torch.Tensor, device_ref: torch.Tensor
+    ) -> torch.Tensor:
         """Detached per-sample OOD weight ``pi_OOD`` in ``[0, 1]``, shape ``[N]``.
 
         ``gmm_fit='none'`` -> all zeros (pure Tent: pi_ID = 1). Otherwise fit /
@@ -336,13 +323,15 @@ class FactorizedAdapter:
         labelling thresholds the posterior at 0.5 to ``{0, 1}``.
         """
         if self.gmm_fit == "none":
-            return torch.zeros(batch_x.shape[0], device=device_ref.device, dtype=device_ref.dtype)
+            return torch.zeros(
+                batch_x.shape[0], device=device_ref.device, dtype=device_ref.dtype
+            )
 
         assert self.posterior is not None
-        scores = self._frozen_score(batch_x)                 # [N], no grad
+        scores = self._frozen_score(batch_x)  # [N], no grad
         scores_np = scores.detach().cpu().numpy()
-        self.posterior.update(scores_np)                     # (re)fit the mixture
-        p_ood_np = self.posterior.posterior(scores_np)       # [N] numpy P(OOD)
+        self.posterior.update(scores_np)  # (re)fit the mixture
+        p_ood_np = self.posterior.posterior(scores_np)  # [N] numpy P(OOD)
         pi_ood = torch.as_tensor(
             p_ood_np, device=device_ref.device, dtype=device_ref.dtype
         ).clamp(0.0, 1.0)
@@ -359,11 +348,15 @@ class FactorizedAdapter:
         ``l1_norm`` it is the NOVA feature-norm penalty weight.
         """
         if self.ood_op == "none":
-            return torch.zeros(logits.shape[0], device=logits.device, dtype=logits.dtype)
+            return torch.zeros(
+                logits.shape[0], device=logits.device, dtype=logits.dtype
+            )
         if self.ood_op == "entropy_max":
-            return self.lam * (-softmax_entropy(logits))  # lambda1 * maximise OOD entropy
+            return self.lam * (
+                -softmax_entropy(logits)
+            )  # lambda1 * maximise OOD entropy
         if self.ood_op == "l1_norm":
-            return self.lam * feature_l1(features)       # suppress norm inflation
+            return self.lam * feature_l1(features)  # suppress norm inflation
         if self.ood_op == "sq_l2_norm":
             # Radial suppression: the per-sample pull 2*lam*g is parallel to g,
             # so the norm shrinks with no rotation toward the class weights.
@@ -371,9 +364,13 @@ class FactorizedAdapter:
         if self.ood_op == "l1_entmax":
             # Two-axis op: norm suppression + entropy maximisation (the two
             # single-axis levers cure complementary axes -- gap vs alignment).
-            return self.lam * feature_l1(features) + self.mu * (-softmax_entropy(logits))
+            return self.lam * feature_l1(features) + self.mu * (
+                -softmax_entropy(logits)
+            )
         if self.ood_op == "sq_l2_entmax":
-            return self.lam * feature_sq_l2(features) + self.mu * (-softmax_entropy(logits))
+            return self.lam * feature_sq_l2(features) + self.mu * (
+                -softmax_entropy(logits)
+            )
         raise ValueError(f"unknown ood_op {self.ood_op!r}")  # pragma: no cover
 
     def _components(
@@ -387,7 +384,7 @@ class FactorizedAdapter:
         ``pi_ood`` (``[N]``), and the grad-carrying ``logits`` (so the marginal
         term reuses them with no extra forward).
         """
-        features, logits = self.backbone._forward(batch_x)   # adapted, grad on
+        features, logits = self.backbone._forward(batch_x)  # adapted, grad on
         pi_ood = self._ood_weight(batch_x, device_ref=logits)
         pi_id = 1.0 - pi_ood
 
@@ -411,7 +408,9 @@ class FactorizedAdapter:
         ``aggregate_loss`` reproduces the ungated behaviour exactly.
         """
         id_contrib, ood_contrib, pi_ood, logits = self._components(batch_x)
-        gate = self._reliability_gate(batch_x, logits) if self.reliability_gate else None
+        gate = (
+            self._reliability_gate(batch_x, logits) if self.reliability_gate else None
+        )
         loss = aggregate_loss(id_contrib, ood_contrib, pi_ood, self.label, gate=gate)
         if self.marginal_lambda != 0.0:
             loss = loss - self.marginal_lambda * softmax_mean_entropy(logits)
@@ -458,12 +457,11 @@ class FactorizedAdapter:
         self.optimizer.step()
 
 
-# ----------------------------------------------------------------- config presets
 # BN-adapt: the shared t=0 baseline. theta is never updated (frozen no-op step);
 # the only thing that changes batch-to-batch is the current-batch BN statistic.
 BNADAPT = dict(score=None, gmm_fit="none", ood_op="none", frozen=True)
 
-# Tent: entropy minimisation only, no scorer / GMM, no OOD term.
+# Tent: entropy minimization only, no scorer / GMM, no OOD term.
 TENT = dict(score=None, gmm_fit="none", ood_op="none")
 
 # NOVA-TTA: maxcos GMM (pooled fit), soft labels, L1-norm OOD penalty.
@@ -475,14 +473,24 @@ NOVA = dict(score="maxcos", gmm_fit="pooled", ood_op="l1_norm", label="soft")
 # The reliability gate restricts the csID entropy term to samples whose adapted
 # confidence stayed >= the frozen source's (the faithful OSTTA filter).
 UNIENT = dict(
-    score="maxcos", gmm_fit="perbatch", ood_op="entropy_max", label="hard",
-    lam=0.2, marginal_lambda=0.2, warmup_K=0,  # constant LR (no warm-up), per the source paper/code
+    score="maxcos",
+    gmm_fit="perbatch",
+    ood_op="entropy_max",
+    label="hard",
+    lam=0.2,
+    marginal_lambda=0.2,
+    warmup_K=0,  # constant LR (no warm-up)
     reliability_gate=True,
 )
 # UniEnt+: as UniEnt but SOFT, posterior-weighted ID/OOD contributions averaged
 # over the full batch (same lambda1/lambda2 = 0.2), with the same reliability gate.
 UNIENT_PLUS = dict(
-    score="maxcos", gmm_fit="perbatch", ood_op="entropy_max", label="soft",
-    lam=0.2, marginal_lambda=0.2, warmup_K=0,  # constant LR (no warm-up), per the source paper/code
+    score="maxcos",
+    gmm_fit="perbatch",
+    ood_op="entropy_max",
+    label="soft",
+    lam=0.2,
+    marginal_lambda=0.2,
+    warmup_K=0,  # constant LR (no warm-up), per the source paper/code
     reliability_gate=True,
 )

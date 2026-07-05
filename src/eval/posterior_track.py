@@ -25,16 +25,11 @@ import logging
 import sys
 from pathlib import Path
 
-# Bootstrap the flat ``src/`` import root when this file is run directly as a
-# script (``python src/eval/posterior_track.py``): that invocation puts
-# ``src/eval`` -- not ``src`` -- on ``sys.path[0]``, so the ``eval.`` / ``scoring.``
-# / ``run`` imports below would fail. pytest (``pythonpath=["src"]``) and importing
-# the module normally already have ``src`` on the path, so this is a no-op there.
 if "scoring" not in sys.modules:
     _SRC_ROOT = str(Path(__file__).resolve().parent.parent)
     if _SRC_ROOT not in sys.path:
         try:
-            import scoring  # noqa: F401  (probe: is src/ already importable?)
+            import scoring
         except ModuleNotFoundError:
             sys.path.insert(0, _SRC_ROOT)
 
@@ -82,9 +77,9 @@ def track_posterior_quality(
     is_id = ~is_ood
 
     out: list[float] = []
-    for s in stream_scores:                       # t = 1..T
-        post.update(np.asarray(s))                # pooled: accumulate+refit; perbatch: refit on s
-        p_ood = post.posterior(eval_scores)       # P(OOD) on the fixed held-out D
+    for s in stream_scores:  # t = 1..T
+        post.update(np.asarray(s))  # pooled: accumulate+refit; perbatch: refit on s
+        p_ood = post.posterior(eval_scores)  # P(OOD) on the fixed held-out D
         # auroc wants higher = more ID, so rank by -P(OOD) (csID should rank above
         # csOOD). auroc concatenates with torch.cat, so feed it torch tensors.
         score_id = torch.from_numpy(-p_ood[is_id])
@@ -139,9 +134,9 @@ def track_fit_quality(
     nll_curve: list[float] = []
     split_acc_curve: list[float] = []
 
-    for s in stream_scores:                       # t = 1..T
-        post.update(np.asarray(s))                # pooled: accumulate+refit; perbatch: refit on s
-        p_ood = post.posterior(eval_scores)       # P(OOD) on the fixed held-out D
+    for s in stream_scores:  # t = 1..T
+        post.update(np.asarray(s))  # pooled: accumulate+refit; perbatch: refit on s
+        p_ood = post.posterior(eval_scores)  # P(OOD) on the fixed held-out D
 
         # AUROC (fit-invariant baseline): rank by -P(OOD), same as track_posterior_quality.
         score_id = torch.from_numpy(-p_ood[is_id])
@@ -175,8 +170,6 @@ def _balanced_accuracy(is_ood: np.ndarray, pred_ood: np.ndarray) -> float:
     return 0.5 * (tpr + tnr)
 
 
-# --------------------------------------------------------------------------- runner
-
 def _stream_batch_scores(backbone, stream, device: str) -> list[np.ndarray]:
     """Frozen-``theta_0`` maxcos scores for every stream batch -> list of 1-D arrays.
 
@@ -192,7 +185,7 @@ def _stream_batch_scores(backbone, stream, device: str) -> list[np.ndarray]:
     with torch.no_grad():
         for _t, x_batch in stream:
             features, _logits = backbone._forward(x_batch.to(device))
-            s = max_cosine(features, backbone.W)        # [N], higher = more ID
+            s = max_cosine(features, backbone.W)  # [N], higher = more ID
             scores.append(s.detach().cpu().numpy().astype(np.float64))
     return scores
 
@@ -212,7 +205,7 @@ def _diag_scores(backbone, x_csid, x_csood, batch_size: int, device: str):
         parts: list[np.ndarray] = []
         with torch.no_grad():
             for i in range(0, len(x), batch_size):
-                xb = x[i: i + batch_size].to(device)
+                xb = x[i : i + batch_size].to(device)
                 features, _logits = backbone._forward(xb)
                 parts.append(max_cosine(features, backbone.W).detach().cpu().numpy())
         if not parts:
@@ -222,10 +215,12 @@ def _diag_scores(backbone, x_csid, x_csood, batch_size: int, device: str):
     s_id = _score_all(x_csid)
     s_ood = _score_all(x_csood)
     eval_scores = np.concatenate([s_id, s_ood])
-    eval_is_ood = np.concatenate([
-        np.zeros(len(s_id), dtype=bool),
-        np.ones(len(s_ood), dtype=bool),
-    ])
+    eval_is_ood = np.concatenate(
+        [
+            np.zeros(len(s_id), dtype=bool),
+            np.ones(len(s_ood), dtype=bool),
+        ]
+    )
     return eval_scores, eval_is_ood
 
 
@@ -263,7 +258,7 @@ def run_dynamics(cfg, out_dir: Path) -> dict:
     device = cfg.device
     torch.manual_seed(cfg.seed)
 
-    # ── Data: csID + csOOD, then disjoint adapt / diagnostic pools ──────────────
+    # Data: csID + csOOD, then disjoint adapt / diagnostic pools
     x_csid, y_csid, x_csood = _load_sources(cfg)
     log.info("Loaded csID=%d, csOOD=%d", len(x_csid), len(x_csood))
 
@@ -290,7 +285,7 @@ def run_dynamics(cfg, out_dir: Path) -> dict:
     x_diag_csid = x_csid[pools.csid_diag]
     x_diag_csood = x_csood[pools.csood_diag]
 
-    # ── Frozen theta_0 scorer (no adaptation) ───────────────────────────────────
+    # Frozen theta_0 scorer (no adaptation)
     backbone = load_backbone(device)
 
     # Stream batch scores drive the GMM accumulation; D scores are computed once.
@@ -300,16 +295,18 @@ def run_dynamics(cfg, out_dir: Path) -> dict:
     )
     log.info(
         "Scored stream T=%d, D csID=%d csOOD=%d",
-        len(stream_scores), int((~eval_is_ood).sum()), int(eval_is_ood.sum()),
+        len(stream_scores),
+        int((~eval_is_ood).sum()),
+        int(eval_is_ood.sum()),
     )
 
-    # ── Trace pooled vs per-batch FIT QUALITY (nll + split_acc + auroc) over t ───
+    # Trace pooled vs per-batch FIT QUALITY (nll + split_acc + auroc) over t
     curves = {
         mode: track_fit_quality(stream_scores, eval_scores, eval_is_ood, mode)
         for mode in ("pooled", "perbatch")
     }
 
-    # ── Persist ─────────────────────────────────────────────────────────────────
+    # Persist
     out_dir = Path(out_dir)
     results_dir = out_dir / "results" / "dynamics"
     results_dir.mkdir(parents=True, exist_ok=True)

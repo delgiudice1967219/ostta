@@ -194,7 +194,7 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
         x_csood=x_csood[pools.csood_diag].to(device),
     )
 
-    # ── Model + adapter ─────────────────────────────────────────────────────────
+    # Model + adapter
     backbone = load_backbone(device)
 
     # Frozen clean-feature class centroids (absorption diagnostic): computed once
@@ -229,7 +229,7 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
         diag_energy_norm(backbone, D, cfg.batch_size) if (dump or dump_feat) else None
     )
 
-    # ── Trace m(t) for t = 0..T and persist ────────────────────────────────────
+    # Trace m(t) for t = 0..T and persist
     trajectory = run_timetrack(
         backbone, adapter, stream, D, cfg.T, batch_size=cfg.batch_size
     )

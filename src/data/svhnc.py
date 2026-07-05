@@ -31,6 +31,7 @@ def _gaussian_shim(*args, **kwargs):
 _skfilters.gaussian = _gaussian_shim
 
 import imagecorruptions.corruptions as _ic_corruptions
+
 _ic_corruptions.gaussian = _gaussian_shim
 
 from imagecorruptions import corrupt
@@ -74,13 +75,12 @@ def load_svhn_c(
     """
 
     def _corrupt_all(items):
-        # items: iterable of (img[3, 32, 32] in [0, 1], label) in canonical order
         np.random.seed(seed)  # deterministic stochastic corruptions
         xs, ys = [], []
         for img_t, lab in items:
             a = (img_t.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-            c = corrupt(a, corruption_name=corruption, severity=severity)  # uint8 HWC
-            xs.append(np.transpose(c, (2, 0, 1)))  # CHW uint8
+            c = corrupt(a, corruption_name=corruption, severity=severity)
+            xs.append(np.transpose(c, (2, 0, 1)))
             ys.append(int(lab))
         return np.stack(xs).astype(np.uint8), np.asarray(ys, dtype=np.int64)
 
@@ -91,7 +91,9 @@ def load_svhn_c(
             blob = np.load(cpath)
             xf, yf = blob["x"], blob["y"]
         else:
-            ds = SVHN(root=data_dir, split="test", download=True, transform=T.ToTensor())
+            ds = SVHN(
+                root=data_dir, split="test", download=True, transform=T.ToTensor()
+            )
             xf, yf = _corrupt_all(ds)
             cdir.mkdir(parents=True, exist_ok=True)
             np.savez(cpath, x=xf, y=yf)

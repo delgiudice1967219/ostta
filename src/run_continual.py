@@ -42,7 +42,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from data.cifar10c import CORRUPTIONS, load_cifar10c_data
 from data.svhnc import load_svhn_c
-from eval.metrics import auroc, fpr_at_tpr95, oscr
+from eval.metrics import auroc, fpr_at_tpr95, fpr_at_tpr95_std, oscr
 from methods.factorized import FactorizedAdapter
 from models.backbone import load_backbone
 from scoring.energy import energy_score
@@ -55,8 +55,10 @@ _OOD_LOADERS = {
     "svhn_c": load_svhn_c,
 }
 
-# Per-corruption metric keys (also the keys of the means block).
-_METRIC_KEYS = ("acc", "auroc", "fpr", "oscr")
+# Per-corruption metric keys (also the keys of the means block). ``fpr`` fixes
+# csOOD recall at 95% (this repo's original convention); ``fpr_std`` is the
+# standard OOD-literature operating point (csID recall at 95%, as in UniEnt).
+_METRIC_KEYS = ("acc", "auroc", "fpr", "fpr_std", "oscr")
 
 
 def _build_adapter(backbone, method_cfg: DictConfig) -> FactorizedAdapter:
@@ -91,27 +93,34 @@ def _corruption_metrics(
     acc = float((preds_id == ys_id).float().mean().item())
     # AUROC / OSCR consume the higher = more ID score, split by membership.
     auc = auroc(e_id_all[id_mask], e_id_all[is_ood_all])
-    # FPR@TPR95 consumes the higher = more OOD score with csOOD as positive.
+    # FPR@TPR95 consumes the higher = more OOD score with csOOD as positive;
+    # fpr_std is the standard (csID-positive) operating point.
     fpr = fpr_at_tpr95(e_ood_all, is_ood_all)
+    fpr_std = fpr_at_tpr95_std(e_ood_all, is_ood_all)
     osc = oscr(
         e_id_all[id_mask].numpy(),
         e_id_all[is_ood_all].numpy(),
         preds_id.numpy(),
         ys_id.numpy(),
     )
-    return {"acc": acc, "auroc": auc, "fpr": fpr, "oscr": osc}
+    return {"acc": acc, "auroc": auc, "fpr": fpr, "fpr_std": fpr_std, "oscr": osc}
 
 
 def _save_outputs(
     out_dir: Path,
     per_corruption: dict[str, dict[str, float]],
     summary: dict,
+    raw_scores: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> None:
     """Write ``summary.json`` (means + per-corruption) and ``continual.npz``.
 
     ``continual.npz`` carries the per-corruption metric arrays as parallel 1-D
     arrays (one entry per corruption, in run order) plus the corruption names, so
-    the full per-corruption table can be reconstructed downstream.
+    the full per-corruption table can be reconstructed downstream. When
+    ``raw_scores`` is given (``name -> (energy, is_ood)`` over that corruption's
+    stream, energy HIGHER = more OOD) the raw per-sample arrays are saved too, as
+    ``energy__{name}`` / ``is_ood__{name}``, so any metric convention can be
+    recomputed offline without re-running the stream.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -123,6 +132,10 @@ def _save_outputs(
         arrays[key] = np.array(
             [per_corruption[name][key] for name in names], dtype=np.float64
         )
+    if raw_scores is not None:
+        for name, (energy, is_ood) in raw_scores.items():
+            arrays[f"energy__{name}"] = np.asarray(energy, dtype=np.float32)
+            arrays[f"is_ood__{name}"] = np.asarray(is_ood, dtype=bool)
     np.savez(out_dir / "continual.npz", **arrays)
 
 
@@ -158,7 +171,7 @@ def run_continual(cfg: DictConfig, out_dir: Path) -> tuple[dict, FactorizedAdapt
 
     corruptions = list(cfg.corruptions) if cfg.corruptions else list(CORRUPTIONS)
 
-    # ── Model + adapter: built ONCE; NOT reset across corruptions ───────────────
+    # Model + adapter: built once; not reset across corruptions
     backbone = load_backbone(device)
     adapter = _build_adapter(backbone, cfg.method)
     log.info(
@@ -169,6 +182,7 @@ def run_continual(cfg: DictConfig, out_dir: Path) -> tuple[dict, FactorizedAdapt
     )
 
     per_corruption: dict[str, dict[str, float]] = {}
+    raw_scores: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for name in corruptions:
         # Re-pool the OOD detector per corruption (no-op for none/perbatch fits).
@@ -201,7 +215,7 @@ def run_continual(cfg: DictConfig, out_dir: Path) -> tuple[dict, FactorizedAdapt
             xb = torch.cat([xi, xo], dim=0)  # [n_id + n_ood], csID first
             n_id = xi.shape[0]
 
-            # ── predict with the CURRENT theta (pre-step), no grad ──────────────
+            # predict with the current theta (pre-step), no grad
             with torch.no_grad():
                 _, logits = adapter.backbone._forward(xb)
             e_ood = energy_score(logits)  # -logsumexp; HIGHER = more OOD
@@ -214,20 +228,22 @@ def run_continual(cfg: DictConfig, out_dir: Path) -> tuple[dict, FactorizedAdapt
             preds_id.append(preds.cpu())
             ys_id.append(yi.cpu())
 
-            # ── then adapt one step on the SAME batch ──────────────────────────
+            # then adapt one step on the SAME batch
             adapter.step(xb)
 
+        e_ood_cat, is_ood_cat = torch.cat(e_ood_all), torch.cat(is_ood_all)
         metrics = _corruption_metrics(
-            torch.cat(e_ood_all),
+            e_ood_cat,
             torch.cat(e_id_all),
-            torch.cat(is_ood_all),
+            is_ood_cat,
             torch.cat(preds_id),
             torch.cat(ys_id),
         )
         per_corruption[name] = metrics
+        raw_scores[name] = (e_ood_cat.numpy(), is_ood_cat.numpy())
         log.info("[%s] %s", name, json.dumps(metrics))
 
-    # ── Mean each metric over the corruptions (not one global pool) ─────────────
+    # Mean each metric over the corruptions (not one global pool)
     mean = {
         key: float(np.mean([per_corruption[name][key] for name in corruptions]))
         for key in _METRIC_KEYS
@@ -238,7 +254,7 @@ def run_continual(cfg: DictConfig, out_dir: Path) -> tuple[dict, FactorizedAdapt
         "n_corruptions": len(corruptions),
     }
 
-    _save_outputs(out_dir, per_corruption, summary)
+    _save_outputs(out_dir, per_corruption, summary, raw_scores=raw_scores)
     log.info("Saved summary.json + continual.npz to %s", out_dir)
     log.info("Summary mean:\n%s", json.dumps(mean, indent=2))
     return summary, adapter

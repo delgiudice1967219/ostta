@@ -23,16 +23,25 @@ import yaml
 FIG_DIR = Path("paper/figures")
 MR = "multirun"
 
+# Colorblind-safe palette (Okabe-Ito), validated against the data-viz CVD checks:
+# the three method hues (vermillion/green/blue) are mutually >=37 Machado-2009
+# deltaE (>> 12 target); the gray baseline is an intentional neutral, distinguished
+# from the green UniEnt line by its dashed style (their deltaE is in the 8-12 band).
+C_BASE   = "#999999"   # BN-adapt: neutral baseline (recessive, dashed)
+C_TENT   = "#D55E00"   # vermillion -- the failure mode
+C_UNIENT = "#009E73"   # bluish-green -- UniEnt family (UniEnt+ = same hue, dashed)
+C_NOVA   = "#0072B2"   # blue -- our method
+
 # Per-method visual identity (consistent across every figure).
 STYLE = {
-    "bnadapt":     dict(label="BN-adapt",  color="#9aa3b0", ls="--", lw=1.6, z=1),
-    "tent":        dict(label="Tent",      color="#c0392b", ls="-",  lw=2.0, z=2),
-    "unient":      dict(label="UniEnt",    color="#d98a2b", ls="-",  lw=1.8, z=3),
-    "unient_plus": dict(label="UniEnt+",   color="#e0b066", ls="--", lw=1.8, z=3),
-    "nova":        dict(label="NOVA",      color="#3a3f9c", ls="-",  lw=2.6, z=5),
+    "bnadapt":     dict(label="BN-adapt",  color=C_BASE,   ls="--", lw=1.6, z=1),
+    "tent":        dict(label="Tent",      color=C_TENT,   ls="-",  lw=2.0, z=2),
+    "unient":      dict(label="UniEnt",    color=C_UNIENT, ls="-",  lw=1.8, z=3),
+    "unient_plus": dict(label="UniEnt+",   color=C_UNIENT, ls="--", lw=1.8, z=3),
+    "nova":        dict(label="NOVA",      color=C_NOVA,   ls="-",  lw=2.6, z=5),
 }
 ORDER = ["bnadapt", "tent", "unient", "unient_plus", "nova"]
-ID_C, OOD_C = "#3a6ea5", "#c0392b"   # csID / csOOD histogram colours
+ID_C, OOD_C = C_NOVA, C_TENT   # csID (known, blue) / csOOD (novel, vermillion)
 
 
 # --------------------------------------------------------------------------- #
@@ -103,7 +112,7 @@ def _traj_bands(corruption, methods, key):
 def _finish(fig, name):
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     png = FIG_DIR / f"{name}.png"
-    fig.savefig(png, dpi=150, bbox_inches="tight")
+    fig.savefig(png, dpi=300, bbox_inches="tight")
     fig.savefig(FIG_DIR / f"{name}.pdf", bbox_inches="tight")
     plt.close(fig)
     return png
@@ -161,6 +170,37 @@ def fig_geometry(corruption="gaussian_noise") -> Path:
     return _finish(fig, "fig_geometry")
 
 
+def fig_confidence(corruption="gaussian_noise") -> Path:
+    """Mean softmax confidence on novel inputs over adaptation: the inflation
+    the body's diagnosis cites (Tent 0.69->0.87), the effect of the rotation
+    shown in fig_geometry's alignment panel. Rendered as a single panel sized
+    for its subfigure slot in the merged diagnostics figure (Fig. 8), using the
+    global per-method styles so panel (a)'s legend keys it too. Tent inflates;
+    UniEnt+ holds flat; NOVA pushes below the un-adapted baseline."""
+    order = ["bnadapt", "tent", "unient_plus", "nova"]
+    bands = _traj_bands(corruption, order, "conf_ood")
+    if not bands:
+        raise FileNotFoundError(f"no timetrack under {MR}/bench/*_{corruption}_s*/")
+    plt.rcParams.update({"font.size": 10, "font.family": "sans-serif"})
+    fig, ax = plt.subplots(figsize=(3.0, 2.0))
+    for m in order:
+        if m in bands:
+            t, mu, sd = bands[m]
+            s = STYLE[m]
+            ax.fill_between(t, mu - sd, mu + sd, color=s["color"],
+                            alpha=0.18, lw=0, zorder=s["z"])
+            ax.plot(t, mu, color=s["color"], ls=s["ls"], lw=s["lw"], zorder=s["z"])
+    ax.set_xlabel("step  t")
+    ax.set_ylabel("novel confidence")
+    ax.grid(True, color="#e8eaef", lw=0.7)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.margins(x=0.02)
+    ax.tick_params(labelsize=8.5)
+    fig.tight_layout()
+    return _finish(fig, "fig_confidence")
+
+
 def fig_ablation() -> Path:
     """Lever-causal headline across 15 corruptions x 3 seeds, with seed error bars.
 
@@ -169,10 +209,10 @@ def fig_ablation() -> Path:
     rows = _load_summaries("bench") + _load_summaries("lever")
     # (method key, x-position, label, colour). A gap after Tent (x=0 -> next at 1.4)
     # signals Tent is the no-detector reference, not a lever variant.
-    spec = [("tent",           0.0, "Tent\n(no detector)",              "#c0392b"),
-            ("det_only",       1.4, "none",                              "#9aa3b0"),
-            ("novadet_entmax", 2.4, "entropy-max",                       "#d98a2b"),
-            ("nova",           3.4, "feature-norm\nsuppression\n(NOVA)", "#3a3f9c")]
+    spec = [("tent",           0.0, "Tent\n(no detector)",              C_TENT),
+            ("det_only",       1.4, "none",                              C_BASE),
+            ("novadet_entmax", 2.4, "entropy-max",                       C_UNIENT),
+            ("nova",           3.4, "feature-norm\nsuppression\n(NOVA)", C_NOVA)]
     xs, vals, errs, cols, labels = [], [], [], [], []
     for m, x, lab, col in spec:
         mean, sd = _seed_stable([r for r in rows if r["method"] == m])
@@ -208,8 +248,11 @@ def fig_distributions(corruption="gaussian_noise") -> Path:
     if not all(dump.values()):
         raise FileNotFoundError(f"missing dist dumps for {corruption}")
 
-    plt.rcParams.update({"font.size": 10.5, "font.family": "sans-serif"})
-    fig, axes = plt.subplots(2, 2, figsize=(8.4, 5.0))
+    # figwidth chosen so that, scaled to its ~0.55\linewidth slot in the merged
+    # Fig. 7, tick/label fonts render at ~7pt -- matching the absorption and
+    # score-density panels it sits beside (consistent fonts across the group).
+    plt.rcParams.update({"font.size": 10, "font.family": "sans-serif"})
+    fig, axes = plt.subplots(2, 2, figsize=(5.6, 3.4))
     rowspec = [("energy", "energy  (higher = novel)"),
                ("norm",   "feature norm")]
     for i, (q, ylab) in enumerate(rowspec):
@@ -394,8 +437,8 @@ def fig_pooling() -> Path:
         if d is None:
             ax.set_title(title + "  (missing)"); continue
         t = d["t"]
-        ax.plot(t, d["perbatch_nll"], color="#9aa3b0", lw=1.8, label="per-batch fit (UniEnt)")
-        ax.plot(t, d["pooled_nll"], color="#3a3f9c", lw=2.4, label="pooled fit (NOVA)")
+        ax.plot(t, d["perbatch_nll"], color=C_BASE, lw=1.8, label="per-batch fit (UniEnt)")
+        ax.plot(t, d["pooled_nll"], color=C_NOVA, lw=2.4, label="pooled fit (NOVA)")
         ax.set_title(title, fontsize=10.5)
         ax.set_xlabel("adaptation step  t")
         ax.grid(True, color="#e8eaef", lw=0.8)
@@ -481,8 +524,8 @@ def fig_tradeoff() -> Path:
     plt.rcParams.update({"font.size": 10, "font.family": "sans-serif"})
     fig, ax = plt.subplots(figsize=(4.8, 3.5))
     for cur, color, marker, label, dy in [
-            (nova, "#3a3f9c", "o", "max-cosine (NOVA)",  6),
-            (ent,  "#d98a2b", "s", "entropy score",     -13)]:
+            (nova, C_NOVA,   "o", "max-cosine (NOVA)",  6),
+            (ent,  C_UNIENT, "s", "entropy score",     -13)]:
         lams = sorted(cur)
         xs = [cur[l]["acc"][0] * 100 for l in lams]
         ys = [cur[l]["auroc"][0] * 100 for l in lams]
@@ -503,7 +546,7 @@ def fig_tradeoff() -> Path:
 
 
 if __name__ == "__main__":
-    for fn in (fig_geometry, fig_ablation, fig_distributions, fig_openness,
+    for fn in (fig_geometry, fig_confidence, fig_ablation, fig_distributions, fig_openness,
                fig_pooling, fig_tsne, fig_absorption, fig_score_density,
                fig_lambda, fig_tradeoff):
         try:

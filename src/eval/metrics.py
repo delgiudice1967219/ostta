@@ -75,6 +75,30 @@ def fpr_at_tpr95(scores, is_ood) -> float:
     return float(np.interp(0.95, tpr, fpr))
 
 
+def fpr_at_tpr95_std(scores, is_ood) -> float:
+    """False-positive rate at 95% true-positive rate, csID as the positive class.
+
+    The standard convention of the OOD-detection literature (Hendrycks & Gimpel;
+    the energy-score paper; UniEnt's "false positive rate of csOOD samples when
+    the true positive rate of csID samples is at 95%"): trace the ROC with csID
+    positive (ID-ness score ``-scores``, since a HIGHER ``score`` means more OOD)
+    and return the FPR (csOOD wrongly admitted as ID) at the lowest threshold
+    whose TPR (csID recall) reaches ``0.95``. Lower is better.
+
+    This is the mirrored operating point of :func:`fpr_at_tpr95`, which fixes
+    csOOD recall instead; the two are NOT interchangeable numerically.
+
+    :param scores: ``[N]`` per-sample OOD scores (torch tensor or array-like).
+    :param is_ood: ``[N]`` boolean / ``{0,1}`` mask, ``True`` for csOOD.
+    :returns: FPR at TPR = 0.95 as a plain Python float.
+    :rtype: float
+    """
+    s = -_to_numpy(scores)                                  # higher = more ID
+    y = (~_to_numpy(is_ood).astype(bool)).astype(np.int64)  # csID = positive (1)
+    fpr, tpr, _ = roc_curve(y, s)
+    return float(np.interp(0.95, tpr, fpr))
+
+
 def oscr(score_id, score_ood, pred, y_id) -> float:
     """Open-Set Classification Rate: area under the CCR-vs-FPR curve.
 

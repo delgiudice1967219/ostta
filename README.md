@@ -54,9 +54,3 @@ sbatch experiments/scripts/repro.sbatch
 
 Each run writes `timetrack.npz` (the full metric trajectory for `t = 0..T`) and a
 compact `summary.json` (start/end of each metric) to the run directory.
-
-## Tests
-
-```bash
-uv run pytest -q
-```

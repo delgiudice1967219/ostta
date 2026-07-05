@@ -1,21 +1,3 @@
-"""Shared primitives for test-time-adaptation methods.
-
-Small, dependency-free helpers used by the factorized adapter:
-
-* :func:`softmax_entropy` -- per-sample predictive entropy of a logit batch.
-  (The same quantity as :func:`scoring.energy.predictive_entropy`; kept here as
-  the *loss* primitive so the adapter's objective code reads locally and the
-  scoring module stays a pure read-only scorer.)
-* :func:`softmax_mean_entropy` -- entropy of the *batch-mean* softmax: a single
-  scalar ``H(f-bar)`` that an objective can maximise to discourage the batch
-  from collapsing onto one class (the marginal anti-collapse term).
-* :func:`feature_l1` -- per-sample feature L1 norm (the NOVA OOD penalty).
-* :func:`feature_sq_l2` -- per-sample squared L2 feature norm (the radial
-  variant of the penalty: shrinks without rotating).
-* :func:`warmup_factor` -- a ramp in ``[0, 1]`` used to scale the learning rate
-  during the first ``K`` adaptation steps.
-"""
-
 from __future__ import annotations
 
 import torch
@@ -46,7 +28,7 @@ def softmax_mean_entropy(logits: torch.Tensor) -> torch.Tensor:
     :returns: the scalar marginal entropy ``H(f-bar)``.
     :rtype: torch.Tensor
     """
-    mean_p = logits.softmax(dim=-1).mean(dim=0)        # [C], the batch marginal
+    mean_p = logits.softmax(dim=-1).mean(dim=0)  # [C], the batch marginal
     return -(mean_p * (mean_p + 1e-12).log()).sum()
 
 
@@ -67,7 +49,7 @@ def feature_l1(features: torch.Tensor) -> torch.Tensor:
 def feature_sq_l2(features: torch.Tensor) -> torch.Tensor:
     """Per-sample squared L2 norm of the penultimate features, shape ``[N]``.
 
-    Minimising this shrinks the feature radially: the per-sample pull
+    Minimizing this shrinks the feature radially: the per-sample pull
     ``d||g||_2^2/dg = 2g`` is parallel to ``g`` itself, so the penalty
     suppresses the norm the energy detector reads without moving the feature's
     direction (no soft-thresholding, hence no rotation toward the class
