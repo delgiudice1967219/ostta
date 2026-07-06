@@ -40,6 +40,7 @@ GROUP_COLS = [c for c in CONFIG_COLS if c != "seed"]
 
 
 def _row(run_dir: Path) -> dict:
+    """One flat CSV row for a run dir: its config columns + every metric at t0/tT."""
     summ = json.loads((run_dir / "summary.json").read_text())
     cfg = yaml.safe_load((run_dir / ".hydra" / "config.yaml").read_text())
     m = cfg.get("method", {})
@@ -67,6 +68,7 @@ def _row(run_dir: Path) -> dict:
 
 
 def _collect(multirun_dir: str) -> list[dict]:
+    """All run rows under ``multirun_dir`` (any dir holding summary.json + .hydra)."""
     root = Path(multirun_dir)
     run_dirs = sorted(
         p.parent
@@ -77,7 +79,15 @@ def _collect(multirun_dir: str) -> list[dict]:
 
 
 def aggregate(multirun_dir: str, out_csv: str) -> int:
-    """Flat dump: one row per run (config cols + every metric at t0/tT)."""
+    """Flat dump: one row per run (config cols + every metric at t0/tT).
+
+    :param multirun_dir: root of a Hydra multirun tree holding the run dirs.
+    :type multirun_dir: str
+    :param out_csv: destination CSV path (parent dirs are created).
+    :type out_csv: str
+    :returns: the number of rows written.
+    :rtype: int
+    """
     rows = _collect(multirun_dir)
     rows.sort(key=lambda r: (str(r["corruption"]), str(r["method"]), str(r["seed"])))
     cols = CONFIG_COLS + [f"{k}_{t}" for k in METRICS for t in ("t0", "tT")]
@@ -105,7 +115,13 @@ def aggregate_by_seed(multirun_dir: str, out_csv: str) -> int:
 
     Emits one row per configuration with ``n_seeds`` and, for every metric and
     endpoint, ``<metric>_<t0|tT>_mean`` / ``<metric>_<t0|tT>_std`` (sample std).
-    Returns the number of grouped configurations written.
+
+    :param multirun_dir: root of a Hydra multirun tree holding the run dirs.
+    :type multirun_dir: str
+    :param out_csv: destination CSV path (parent dirs are created).
+    :type out_csv: str
+    :returns: the number of grouped configurations written.
+    :rtype: int
     """
     rows = _collect(multirun_dir)
     groups: dict[tuple, list[dict]] = {}

@@ -1,11 +1,3 @@
-"""Clean CIFAR-10 test-set loader (torchvision).
-
-Returns float tensors in [0, 1] CHW -- the same preprocessing as
-:func:`data.cifar10c.load_cifar10c_data` (uint8/255, CHW transpose) and the same
-image order: CIFAR-10-C is built from the standard CIFAR-10 test set. Feeds the
-frozen clean-feature class centroids of the absorption diagnostics.
-"""
-
 import torch
 from torchvision import datasets, transforms
 

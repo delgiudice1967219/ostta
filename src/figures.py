@@ -1,11 +1,3 @@
-"""Paper figures rendered from saved results (no GPU, no re-running).
-
-Each function loads saved ``.npz`` / ``summary.json`` artifacts under ``multirun/``
-and writes a figure to ``paper/figures/``. Run ``python src/figures.py`` to render
-all of them. All trajectory/aggregate data comes from the seeded multi-seed runs
-(``multirun/{bench,lever,openness,dist}``) so every figure shares one provenance.
-"""
-
 from __future__ import annotations
 
 import csv
@@ -116,6 +108,7 @@ def _traj_bands(corruption, methods, key):
 
 
 def _finish(fig, name):
+    """Save ``fig`` as ``{name}.png`` + ``.pdf`` under ``FIG_DIR``; return the PNG path."""
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     png = FIG_DIR / f"{name}.png"
     fig.savefig(png, dpi=300, bbox_inches="tight")
@@ -132,7 +125,13 @@ def fig_geometry(corruption="gaussian_noise") -> Path:
     onto the known classes and collapses detection even as the norm gap widens and
     accuracy climbs -- the trade-off adaptation imposes; NOVA opens the gap widest
     and detects best at matched accuracy. UniEnt+ is dropped in favour of UniEnt
-    (near-identical behaviour, fewer lines)."""
+    (near-identical behaviour, fewer lines).
+
+    :param corruption: corruption whose saved runs are plotted.
+    :type corruption: str
+    :returns: path of the written PNG.
+    :rtype: Path
+    """
     order = LINE_ORDER
     panels = [
         ("norm_gap_l2", "norm gap"),
@@ -193,12 +192,13 @@ def fig_geometry(corruption="gaussian_noise") -> Path:
 
 
 def fig_confidence(corruption="gaussian_noise") -> Path:
-    """Mean softmax confidence on novel inputs over adaptation: the inflation
-    the body's diagnosis cites (Tent 0.69->0.87), the effect of the rotation
-    shown in fig_geometry's alignment panel. Rendered as a single panel sized
-    for its subfigure slot in the merged diagnostics figure (Fig. 7), using the
-    global per-method styles so panel (a)'s legend keys it too. Tent inflates;
-    UniEnt holds flat; NOVA pushes below the un-adapted baseline."""
+    """Mean softmax confidence on novel inputs over adaptation.
+
+    :param corruption: corruption whose saved runs are plotted.
+    :type corruption: str
+    :returns: path of the written PNG.
+    :rtype: Path
+    """
     order = LINE_ORDER
     bands = _traj_bands(corruption, order, "conf_ood")
     if not bands:
@@ -225,10 +225,7 @@ def fig_confidence(corruption="gaussian_noise") -> Path:
 
 
 def fig_ablation() -> Path:
-    """Lever-causal headline across 15 corruptions x 3 seeds, with seed error bars.
-
-    Tent (no detector, adapts on all inputs) is the leftmost bar, set off by a gap
-    and a lighter face, then the three lever variants that share NOVA's detector."""
+    """Lever-causal headline across 15 corruptions x 3 seeds, with seed error bars."""
     rows = _load_summaries("bench") + _load_summaries("lever")
     spec = [
         ("tent", 0.0, "Tent\n(no detector)", C_TENT),
@@ -282,9 +279,16 @@ def fig_ablation() -> Path:
 
 
 def fig_distributions(corruption="gaussian_noise") -> Path:
-    """Per-sample energy & feature-norm of known vs novel inputs, Tent vs NOVA (t=T)."""
+    """Per-sample energy & feature-norm of known vs novel inputs, Tent vs NOVA (t=T).
+
+    :param corruption: corruption whose saved dumps are plotted.
+    :type corruption: str
+    :returns: path of the written PNG.
+    :rtype: Path
+    """
 
     def load(m):
+        """dump.npz arrays for method ``m``, or ``None`` if absent."""
         hits = glob.glob(f"{MR}/dist/{m}_{corruption}/dump.npz")
         return dict(np.load(hits[0])) if hits else None
 
@@ -374,14 +378,24 @@ def fig_openness() -> Path:
 
 
 def fig_tsne(corruption="gaussian_noise", n=1500, seed=0, perplexity=40) -> Path:
-    """t-SNE of the latent space (UniEnt Fig. 6 style): csID by class, csOOD yellow.
+    """t-SNE of the latent space: csID by class, csOOD yellow.
 
-    Four panels --- BN-adapt (source), Tent, UniEnt, NOVA --- each a separate t-SNE
-    of the held-out diagnostic features (theta_T, except BN-adapt = theta_0).
+    :param corruption: unused; the dumps under ``multirun/tsne`` are already
+        single-corruption (kept for signature symmetry with the other figures).
+    :type corruption: str
+    :param n: points sampled per population before embedding.
+    :type n: int
+    :param seed: seed for the subsampling and the t-SNE initialisation.
+    :type seed: int
+    :param perplexity: t-SNE perplexity.
+    :type perplexity: int
+    :returns: path of the written PNG.
+    :rtype: Path
     """
     from sklearn.manifold import TSNE
 
     def load(m):
+        """dump.npz arrays for method ``m``, or ``None`` if absent."""
         hits = glob.glob(f"{MR}/tsne/{m}/dump.npz")
         return dict(np.load(hits[0])) if hits else None
 
@@ -459,14 +473,13 @@ def fig_tsne(corruption="gaussian_noise", n=1500, seed=0, perplexity=40) -> Path
 
 
 def fig_absorption(corruption="gaussian_noise") -> Path:
-    """Relabelling & absorption diagnostics over adaptation (App. figure).
+    """Relabelling & absorption diagnostics over adaptation.
 
-    Two panels from the absorb reruns: the csOOD cosine to each input's
-    theta_0-predicted class (falls under Tent while max-cosine rises = features
-    rotate onto *other* prototypes: relabelling) and the csOOD distance to the
-    nearest frozen clean-CIFAR centroid (falls under Tent = absorption into the
-    source classes; NOVA halts it). UniEnt+ is dropped (near-identical to
-    UniEnt), matching the other trajectory figures."""
+    :param corruption: corruption whose saved runs are plotted.
+    :type corruption: str
+    :returns: path of the written PNG.
+    :rtype: Path
+    """
     traj = {}
     for m in LINE_ORDER:
         hits = glob.glob(f"{MR}/absorb/{m}_{corruption}_s0/timetrack.npz")
@@ -522,8 +535,14 @@ def fig_absorption(corruption="gaussian_noise") -> Path:
 
 
 def fig_score_density(corruption="gaussian_noise") -> Path:
-    """Frozen max-cosine score densities at t=0 (App. figure): the score NOVA's
-    detection rule reads already separates csID from csOOD before any adaptation."""
+    """Frozen max-cosine score densities at t=0: the score NOVA's
+    detection rule reads already separates csID from csOOD before any adaptation.
+
+    :param corruption: corruption whose saved dump is plotted.
+    :type corruption: str
+    :returns: path of the written PNG.
+    :rtype: Path
+    """
     hits = glob.glob(f"{MR}/absorb/*_{corruption}_s0/dump.npz")
     if not hits:
         raise FileNotFoundError(f"no dump.npz under {MR}/absorb/*_{corruption}_s0/")
@@ -554,6 +573,7 @@ def fig_pooling() -> Path:
     """Pooling dynamics: held-out GMM NLL, pooled vs per-batch, at N=20 and N=200."""
 
     def load(dirpat):
+        """posterior_quality.npz arrays under ``dirpat``, or ``None`` if absent."""
         hits = glob.glob(f"{dirpat}/**/posterior_quality.npz", recursive=True)
         return dict(np.load(hits[0])) if hits else None
 
@@ -584,12 +604,8 @@ def fig_pooling() -> Path:
 
 
 def _lambda_curve(dirs, method_name):
-    """{lam: {metric:(mean, seed-stable std)}} for one method across dirs.
-
-    Aggregates seed-stably (mean over the 15 corruptions per seed, then mean/std
-    over the 3 seeds) so the error bar is the seed stability reported in Table 1,
-    not the much larger across-corruption spread."""
-    # lam -> seed -> metric -> [per-corruption values]
+    """``{lam: {metric: (mean, std)}}`` for one method, aggregated seed-stably
+    (mean over corruptions per seed, then mean/std across the seeds)."""
     perseed = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     for d in dirs:
         for sj in glob.glob(f"{MR}/{d}/**/summary.json", recursive=True):

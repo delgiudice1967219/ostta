@@ -57,6 +57,8 @@ class OODPosterior:
 
         ``pooled``: append ``scores`` to the history and refit on the full pool.
         ``perbatch``: refit on ``scores`` alone.
+
+        :param scores: 1-D array-like of frozen scores from the current batch.
         """
         batch = _as_column(scores)
         if self.mode == "pooled":

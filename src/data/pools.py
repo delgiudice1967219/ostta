@@ -43,6 +43,7 @@ class DataPools:
         self._assert_disjoint()
 
     def _assert_disjoint(self):
+        """Invariant check: the adapt and diagnostic pools never share an index."""
         assert len(set(self.csid_adapt) & set(self.csid_diag)) == 0, \
             "csID adaptation and diagnostic pools overlap"
         assert len(set(self.csood_adapt) & set(self.csood_diag)) == 0, \

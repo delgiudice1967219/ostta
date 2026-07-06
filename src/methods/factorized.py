@@ -1,52 +1,3 @@
-"""Factorized test-time-adaptation adapter (score x gmm_fit x ood_op x label).
-
-A single configurable adapter that subsumes several open-set TTA methods as
-points in a four-axis design space:
-
-* ``score   in {maxcos, energy, entropy}`` -- the scalar a *frozen* theta_0
-  scorer maps each sample to; the input to the OOD GMM.
-* ``gmm_fit in {none, perbatch, pooled}``  -- how (and whether) a 2-component
-  GMM is fit to the scores to produce a soft OOD posterior. ``none`` skips the
-  scorer entirely and yields ``pi_ID = 1, pi_OOD = 0`` (i.e. plain Tent).
-* ``ood_op  in {none, entropy_max, l1_norm, sq_l2_norm, l1_entmax,
-  sq_l2_entmax}`` -- the OOD-regime objective: ``0`` (none), ``lam * (-H(p))``
-  (entropy-max, ``lam`` = lambda1), ``lam * ||features||_1`` (l1_norm),
-  ``lam * ||features||_2^2`` (sq_l2_norm -- the RADIAL norm penalty, which
-  shrinks without the soft-thresholding rotation of L1), or a two-axis
-  combination ``lam * ||features|| + mu * (-H(p))`` pairing a norm penalty
-  (L1 or squared L2) with entropy maximisation (l1_entmax / sq_l2_entmax).
-* ``label   in {hard, soft}`` -- whether the posterior is thresholded to
-  ``{0, 1}`` (hard) or used directly as a soft weight (soft). ``label`` ALSO
-  selects the normalization (see ``aggregate_loss``): ``hard`` averages each
-  entropy term over its own pseudo-subset, ``soft`` over the full batch.
-
-The objective, on the *adapted* model's outputs, is::
-
-    L = aggregate(pi_ID * H,  pi_OOD * ood_op; label)  -  marginal_lambda * H(f-bar)
-
-where ``H`` is per-sample predictive (softmax) entropy, ``pi`` is detached,
-``H(f-bar)`` is the entropy of the batch-mean softmax (the marginal anti-collapse
-term, weight ``marginal_lambda`` = lambda2), and ``aggregate`` is the per-``label``
-normalization. With ``marginal_lambda = 0`` the marginal term drops out (Tent /
-NOVA). When ``reliability_gate`` is set (the faithful UniEnt filter), the csID
-entropy term is additionally restricted to samples whose adapted confidence stayed
-``>=`` the frozen source's (the OOD and marginal terms are untouched). One ``.step``
-performs a single BN-affine Adam update with a linear LR warm-up.
-
-Two-model design:
-
-* The **adapted** model is the passed ``backbone`` -- only its BN affine
-  parameters are trainable (via ``Backbone.set_bn_trainable_only``). Its BN
-  layers use current-batch statistics (``track_running_stats=False``).
-* The **frozen scorer** is a ``deepcopy`` snapshot of the backbone taken at
-  construction (when the backbone is still at theta_0). It has ``requires_grad``
-  off everywhere, stays in train mode (batch-stat BN) and is *never* updated. It
-  is only built when ``gmm_fit != 'none'`` (Tent needs no scorer).
-
-Config presets ``BNADAPT``, ``TENT``, ``NOVA``, ``UNIENT`` and ``UNIENT_PLUS``
-are provided.
-"""
-
 from __future__ import annotations
 
 import copy
@@ -103,6 +54,16 @@ def aggregate_loss(
     * ``hard``: ``(id_contrib * gate).sum() / max(sum(pi_ID * gate), 1)`` plus the
       same (ungated) OOD per-subset mean.
 
+    :param id_contrib: ``[N]`` weighted per-sample ID contributions (``pi_ID * H``).
+    :type id_contrib: torch.Tensor
+    :param ood_contrib: ``[N]`` weighted per-sample OOD contributions (``pi_OOD * ood_op``).
+    :type ood_contrib: torch.Tensor
+    :param pi_ood: ``[N]`` detached per-sample OOD weight (hard mask or soft posterior).
+    :type pi_ood: torch.Tensor
+    :param label: ``hard`` | ``soft`` -- the aggregation mode.
+    :type label: str
+    :param gate: optional ``[N]`` detached OSTTA reliability mask; ``None`` = no gating.
+    :type gate: torch.Tensor | None
     :returns: the scalar loss (grad-carrying through the contribution tensors).
     :rtype: torch.Tensor
     """
@@ -124,7 +85,8 @@ def aggregate_loss(
 
 
 class FactorizedAdapter:
-    """Configurable open-set TTA adapter; see the module docstring for the axes.
+    """Configurable open-set TTA adapter: every method (Tent, NOVA, UniEnt(+),
+    BN-adapt, the ablation cells) is one setting of the axes documented below.
 
     :param backbone: the model to adapt (``Backbone``); only its BN affine
         params are trained. Assumed to be at theta_0 at construction time.
@@ -339,7 +301,6 @@ class FactorizedAdapter:
             pi_ood = (pi_ood >= 0.5).to(device_ref.dtype)
         return pi_ood.detach()
 
-    # ------------------------------------------------------------------- loss / terms
     def _ood_term(self, logits: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
         """Per-sample OOD objective, shape ``[N]`` (grad flows through the adapted model).
 
@@ -419,9 +380,12 @@ class FactorizedAdapter:
     def loss_terms(self, batch_x: torch.Tensor) -> dict[str, float]:
         """The scalar loss components for ``batch_x`` (no optimisation step).
 
-        Returns ``{'id_entropy', 'ood_norm', 'marginal_entropy'}`` -- the batch
-        means of the ID-entropy and OOD contributions, and the (unweighted)
-        marginal entropy ``H(f-bar)``. Reported as plain Python floats (detached).
+        :param batch_x: ``[N, 3, 32, 32]`` mixed input batch.
+        :type batch_x: torch.Tensor
+        :returns: ``{'id_entropy', 'ood_norm', 'marginal_entropy'}`` -- the batch
+            means of the ID-entropy and OOD contributions, and the (unweighted)
+            marginal entropy ``H(f-bar)``, as plain (detached) Python floats.
+        :rtype: dict[str, float]
         """
         id_contrib, ood_contrib, _pi_ood, logits = self._components(batch_x)
         return {
@@ -430,7 +394,6 @@ class FactorizedAdapter:
             "marginal_entropy": float(softmax_mean_entropy(logits).item()),
         }
 
-    # -------------------------------------------------------------------------- step
     def step(self, batch_x: torch.Tensor) -> None:
         """One BN-affine gradient step on ``batch_x`` with the LR warm-up applied.
 
@@ -441,6 +404,9 @@ class FactorizedAdapter:
 
         In ``frozen`` (BN-adapt) mode this is a no-op apart from advancing the
         step counter: ``theta`` stays at ``theta_0`` and the trajectory is flat.
+
+        :param batch_x: ``[N, 3, 32, 32]`` mixed input batch to adapt on.
+        :type batch_x: torch.Tensor
         """
         self.t += 1
         if self.frozen:

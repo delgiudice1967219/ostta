@@ -7,6 +7,9 @@ import torch
 
 @dataclass
 class BatchMeta:
+    """One frozen batch of the stream: the 1-indexed step ``t`` plus the csID /
+    csOOD pool indices it draws (``csood_indices`` is empty in closed-set mode)."""
+
     t: int
     csid_indices: list[int]
     csood_indices: list[int]
@@ -14,18 +17,28 @@ class BatchMeta:
 
 @dataclass
 class AdaptationStream:
+    """A frozen adaptation stream: per-batch metadata plus the source tensors it
+    indexes. Iterating yields ``(t, batch)`` with the batch assembled on the fly,
+    csID samples first and csOOD after (the order downstream slicing relies on)."""
+
     batches: list[BatchMeta]
     x_csid: torch.Tensor
     y_csid: torch.Tensor
     x_csood: torch.Tensor
 
     def __iter__(self) -> Iterator[tuple[int, torch.Tensor]]:
+        """Yield ``(t, batch)`` pairs, each batch assembled csID-first."""
         for meta in self.batches:
             x_id = self.x_csid[meta.csid_indices]
             x_ood = self.x_csood[meta.csood_indices]
             yield meta.t, torch.cat([x_id, x_ood], dim=0)
 
     def to_meta_list(self) -> list[dict]:
+        """The stream's batch metadata as plain dicts (JSON-serialisable).
+
+        :returns: one ``{'t', 'csid_indices', 'csood_indices'}`` dict per batch.
+        :rtype: list[dict]
+        """
         return [
             {"t": b.t, "csid_indices": b.csid_indices, "csood_indices": b.csood_indices}
             for b in self.batches

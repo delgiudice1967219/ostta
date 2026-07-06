@@ -108,10 +108,7 @@ def _build_adapter(backbone, method_cfg: DictConfig) -> FactorizedAdapter:
 def _summarize(trajectory: list[dict]) -> dict:
     """Compact ``{metric: {t0, tT}}`` summary from the full ``m(t)`` trajectory.
 
-    Records the first (``t=0``) and last (``t=T``) value of every metric -- the
-    start/end pair used to summarise a run (e.g. AUROC 0.79 -> ~0.65 for Tent).
-    Also echoes the trajectory length and the actual ``t`` endpoints.
-    """
+    Records the first (``t=0``) and last (``t=T``) value of every metric"""
     first, last = trajectory[0], trajectory[-1]
     summary = {
         "n_points": len(trajectory),
@@ -153,13 +150,20 @@ def run_pipeline(cfg: DictConfig, out_dir: Path) -> dict:
     4. Assemble the diagnostic set ``D`` from the diag pools (on ``device``).
     5. Load the backbone, build the method's adapter, trace ``m(t)`` for
        ``t = 0..T``, and write ``timetrack.npz`` + ``summary.json`` to ``out_dir``.
+
+    :param cfg: composed Hydra config (data, method group, protocol knobs).
+    :type cfg: DictConfig
+    :param out_dir: run directory the artifacts are written to.
+    :type out_dir: Path
+    :returns: the ``{metric: {t0, tT}}`` summary also saved as ``summary.json``.
+    :rtype: dict
     """
     log.info("Config:\n%s", OmegaConf.to_yaml(cfg))
 
     device = cfg.device
     torch.manual_seed(cfg.seed)
 
-    # ── Data: csID + csOOD, then the disjoint adapt / diagnostic pools ──────────
+    # Data: csID + csOOD, then the disjoint adapt / diagnostic pools
     x_csid, y_csid, x_csood = _load_sources(cfg)
     log.info("Loaded csID=%d, csOOD=%d", len(x_csid), len(x_csood))
 
@@ -286,6 +290,9 @@ def main(cfg: DictConfig) -> None:
     Resolves the output dir (``out_dir`` override, else the Hydra run dir --
     looked up via ``HydraConfig`` so it is correct whether or not
     ``hydra.job.chdir`` moved the cwd) and delegates to :func:`run_pipeline`.
+
+    :param cfg: composed Hydra config for this run.
+    :type cfg: DictConfig
     """
     if cfg.out_dir is not None:
         out_dir = Path(cfg.out_dir)

@@ -10,6 +10,11 @@ def softmax_entropy(logits: torch.Tensor) -> torch.Tensor:
     than ``p * log p`` directly. Ranges from 0 (one-hot / confident) up to
     ``log K`` (uniform). This is the ID ("confident prediction") objective: a
     model that minimises it sharpens its predictions.
+
+    :param logits: a ``[N, C]`` batch of logits (grad may flow through).
+    :type logits: torch.Tensor
+    :returns: per-sample entropies, shape ``[N]``.
+    :rtype: torch.Tensor
     """
     return -(logits.softmax(dim=-1) * logits.log_softmax(dim=-1)).sum(dim=-1)
 
@@ -42,6 +47,11 @@ def feature_l1(features: torch.Tensor) -> torch.Tensor:
     ROTATES the surviving direction toward the dominant (class-aligned)
     coordinates while it shrinks. :func:`feature_sq_l2` is the radial
     alternative without that angular side effect.
+
+    :param features: ``[N, d]`` penultimate features (non-negative: post-ReLU, pooled).
+    :type features: torch.Tensor
+    :returns: per-sample L1 norms, shape ``[N]``.
+    :rtype: torch.Tensor
     """
     return features.abs().sum(dim=-1)
 
@@ -54,6 +64,11 @@ def feature_sq_l2(features: torch.Tensor) -> torch.Tensor:
     suppresses the norm the energy detector reads without moving the feature's
     direction (no soft-thresholding, hence no rotation toward the class
     weights).
+
+    :param features: ``[N, d]`` penultimate features.
+    :type features: torch.Tensor
+    :returns: per-sample squared L2 norms, shape ``[N]``.
+    :rtype: torch.Tensor
     """
     return features.pow(2).sum(dim=-1)
 

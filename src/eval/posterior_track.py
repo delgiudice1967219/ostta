@@ -1,23 +1,3 @@
-"""Posterior-quality-over-time: pooled vs per-batch GMM detector dynamics.
-
-The detector uses a 2-component 1-D GMM over a FROZEN-scorer score. Because the
-score comes from the frozen ``theta_0`` backbone, its distribution is stationary
-across the adaptation stream, so a *pooled* GMM (refit on accumulated history)
-should reach a tighter, earlier-converging csID/csOOD posterior than a *per-batch*
-refit (which only ever sees one noisy batch).
-
-This module measures that directly: for ``mode in {pooled, perbatch}`` it traces
-the AUROC of the GMM posterior ``P(csOOD)`` against the *true* ``is_ood`` on a
-fixed held-out diagnostic set ``D``, as a function of adaptation step ``t``. No
-model adaptation happens -- the scorer is frozen -- so this cleanly isolates the
-**detector**.
-
-The core :func:`track_posterior_quality` is pure (synthetic-score-driven, no
-backbone) and fully unit-tested. :func:`run_dynamics` mirrors ``run.py``'s data
-setup, computes frozen-``theta_0`` maxcos scores for the stream batches + ``D``,
-and saves the pooled-vs-per-batch curves.
-"""
-
 from __future__ import annotations
 
 import json
@@ -158,9 +138,7 @@ def _balanced_accuracy(is_ood: np.ndarray, pred_ood: np.ndarray) -> float:
 
     TPR = recall on the csOOD population, TNR = recall on the csID population. A
     population with no members contributes its perfect-recall convention (``1.0``)
-    so an absent class never drags the balanced mean down. Matches the brief's
-    ``mean(TPR, TNR)`` definition (equivalent to ``sklearn``'s balanced accuracy
-    on this 2-class problem).
+    so an absent class never drags the balanced mean down.
     """
     is_id = ~is_ood
     n_ood = int(is_ood.sum())
@@ -202,6 +180,7 @@ def _diag_scores(backbone, x_csid, x_csood, batch_size: int, device: str):
     from scoring.alignment import max_cosine
 
     def _score_all(x) -> np.ndarray:
+        """Frozen maxcos score for every image in ``x``, batched, no grad."""
         parts: list[np.ndarray] = []
         with torch.no_grad():
             for i in range(0, len(x), batch_size):
@@ -243,6 +222,10 @@ def run_dynamics(cfg, out_dir: Path) -> dict:
        std}`` -- ``std`` over ``t`` captures per-batch JITTER: perbatch std >> pooled
        std is the reliability signal).
 
+    :param cfg: composed Hydra config (data + dynamics knobs).
+    :type cfg: DictConfig
+    :param out_dir: run directory the artifacts are written to.
+    :type out_dir: Path
     :returns: the summary dict (also logged).
     :rtype: dict
     """
@@ -351,6 +334,7 @@ def main() -> None:
         config_name="dynamics",
     )
     def _run(cfg: DictConfig) -> None:
+        """Hydra wrapper: resolve the output dir and delegate to run_dynamics."""
         if cfg.out_dir is not None:
             out_dir = Path(cfg.out_dir)
         else:

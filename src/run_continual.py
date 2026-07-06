@@ -1,32 +1,3 @@
-"""Continual / online open-set TTA benchmark runner.
-
-Mirrors the faithful UniEnt continual protocol: the adapter (backbone + BN-affine
-optimizer + GMM) is built ONCE and adapted across the 15 corruptions **without
-reset**; only the OOD detector is re-pooled per corruption (``reset_detector()``
-at each boundary, since the frozen score is only stationary within a corruption).
-
-Per corruption the runner streams an online sequence of 1:1 mixed mini-batches
-(``batch_csid`` csID + ``batch_csid`` csOOD, csID first). For each batch it
-**predicts with the current theta** (a no-grad forward) and only THEN takes one
-adaptation step on the same batch -- so the metrics see the pre-step model and
-the model carries the cumulative adaptation of every earlier batch. Predictions
-and energy scores are accumulated over all batches of a corruption, scored once
-**per corruption**, and finally averaged over the corruptions.
-
-Sign conventions (a flip turns AUROC into ``1 - AUROC``):
-
-* ``energy_score(logits) = -logsumexp`` -> HIGHER = more OOD. This is passed to
-  :func:`fpr_at_tpr95` (csOOD positive, higher = OOD).
-* ``-energy_score`` (= ``logsumexp``) -> HIGHER = more ID. Split into its csID /
-  csOOD halves it is passed to :func:`auroc` (higher = ID) and :func:`oscr`
-  (higher = ID).
-* Accuracy is csID-only: ``argmax`` of the first ``n_id`` logits vs ``y_csid``.
-
-The core ``run_continual(cfg, out_dir)`` is Hydra-independent (like ``run.py``'s
-``run_pipeline``) so it is callable directly from tests; the ``@hydra.main``
-wrapper just resolves the output dir and delegates.
-"""
-
 from __future__ import annotations
 
 import json
@@ -80,13 +51,15 @@ def _corruption_metrics(
     preds_id: torch.Tensor,
     ys_id: torch.Tensor,
 ) -> dict[str, float]:
-    """The four open-set metrics for one corruption from its accumulated arrays.
+    """The five open-set metrics for one corruption from its accumulated arrays.
 
     All tensors are on the CPU. ``e_ood_all`` is the energy (higher = OOD) over
     the full csID+csOOD stream; ``e_id_all = -e_ood_all`` (higher = ID); the
     boolean ``is_ood_all`` marks the csOOD samples; ``preds_id`` / ``ys_id`` are
-    the csID predictions / labels. The sign handed to each metric matches that
-    metric's documented convention (see the module docstring).
+    the csID predictions / labels. Sign conventions matter (a flip silently
+    turns AUROC into ``1 - AUROC``): both FPR variants consume the higher = more
+    OOD energy, while AUROC and OSCR consume its negation (higher = more ID),
+    split into its csID / csOOD halves.
     """
     id_mask = ~is_ood_all
 
@@ -157,6 +130,14 @@ def run_continual(cfg: DictConfig, out_dir: Path) -> tuple[dict, FactorizedAdapt
 
     The returned ``adapter`` lets callers inspect post-run state (e.g. the pooled
     GMM history) without re-running.
+
+    :param cfg: composed Hydra config (data, method group, continual knobs).
+    :type cfg: DictConfig
+    :param out_dir: run directory the artifacts are written to.
+    :type out_dir: Path
+    :returns: ``(summary, adapter)`` --- the saved summary dict and the adapter
+        in its end-of-stream state.
+    :rtype: tuple[dict, FactorizedAdapter]
     """
     log.info("Config:\n%s", OmegaConf.to_yaml(cfg))
 
@@ -271,6 +252,9 @@ def main(cfg: DictConfig) -> None:
     Resolves the output dir (``out_dir`` override, else the Hydra run dir --
     looked up via ``HydraConfig`` so it is correct whether or not
     ``hydra.job.chdir`` moved the cwd) and delegates to :func:`run_continual`.
+
+    :param cfg: composed Hydra config for this run.
+    :type cfg: DictConfig
     """
     if cfg.out_dir is not None:
         out_dir = Path(cfg.out_dir)

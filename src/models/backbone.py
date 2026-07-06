@@ -1,25 +1,3 @@
-"""RobustBench WideResNet-40-2 backbone wrapper.
-
-Loads the ``Hendrycks2020AugMix_WRN`` CIFAR-10 corruptions model from the
-RobustBench model zoo and exposes the pieces that test-time adaptation needs:
-
-* ``features(x)`` -- the embedding fed to the final classifier (``d = 128``),
-  captured as the *input* to the last ``nn.Linear`` via a forward hook.
-* ``logits(x)``   -- the classifier output (``K = 10``).
-* ``W`` / ``b``   -- the (frozen) final-linear weight ``[K, d]`` and bias ``[K]``.
-* ``bn_affine_params()`` / ``set_bn_trainable_only()`` -- the BN affine
-  parameters (gamma, beta), which are the only parameters adapted during TTA.
-
-BN layers are put in train mode with ``track_running_stats=False`` at load time
-so every forward pass normalises with the *current batch* statistics.
-
-The feature hook does **not** detach the captured tensor: gradients must flow
-through ``features(x)`` into the BN affine parameters so that downstream adapters
-(e.g. an L1 feature-norm penalty) can backpropagate through it. Callers that want
-a frozen, no-grad embedding are expected to wrap the call in ``torch.no_grad()``
-themselves.
-"""
-
 from __future__ import annotations
 
 import torch
@@ -64,6 +42,7 @@ class Backbone:
         self._head.register_forward_hook(self._capture_hook)
 
     def _capture_hook(self, _module, inputs, _output) -> None:
+        """Forward hook on the head: stash its input (the embedding), grad intact."""
         self._captured_features = inputs[0]
 
     def _forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -79,12 +58,24 @@ class Backbone:
         return features, logits
 
     def features(self, x: torch.Tensor) -> torch.Tensor:
-        """Embedding fed to the classifier head, shape ``[N, d]`` (``d = 128``)."""
+        """Embedding fed to the classifier head.
+
+        :param x: ``[N, 3, 32, 32]`` input images.
+        :type x: torch.Tensor
+        :returns: features of shape ``[N, d]`` (``d = 128``).
+        :rtype: torch.Tensor
+        """
         features, _ = self._forward(x)
         return features
 
     def logits(self, x: torch.Tensor) -> torch.Tensor:
-        """Classifier logits, shape ``[N, K]`` (``K = 10``)."""
+        """Classifier logits.
+
+        :param x: ``[N, 3, 32, 32]`` input images.
+        :type x: torch.Tensor
+        :returns: logits of shape ``[N, K]`` (``K = 10``).
+        :rtype: torch.Tensor
+        """
         _, logits = self._forward(x)
         return logits
 
@@ -126,6 +117,13 @@ def load_backbone(device: str = "cpu", model_dir: str = _DEFAULT_MODEL_DIR) -> B
     under ``model_dir``. BN layers are set to train mode with
     ``track_running_stats=False`` (current-batch statistics), and only the BN
     affine parameters are left trainable.
+
+    :param device: torch device the model is moved to (``"cpu"`` | ``"cuda"``).
+    :type device: str
+    :param model_dir: cache directory for the downloaded checkpoint.
+    :type model_dir: str
+    :returns: the wrapped backbone, configured for BN-affine TTA.
+    :rtype: Backbone
     """
     model = _rb_load_model(
         model_name=_MODEL_NAME,

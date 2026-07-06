@@ -22,6 +22,7 @@ _orig_gaussian = _skfilters.gaussian
 
 
 def _gaussian_shim(*args, **kwargs):
+    """skimage compat: map the removed ``multichannel`` kwarg to ``channel_axis``."""
     if "multichannel" in kwargs:
         multichannel = kwargs.pop("multichannel")
         kwargs.setdefault("channel_axis", -1 if multichannel else None)
@@ -75,6 +76,7 @@ def load_svhn_c(
     """
 
     def _corrupt_all(items):
+        """Corrupt every ``(img, label)`` pair -> ``(uint8 [N,3,32,32], int64 [N])``."""
         np.random.seed(seed)  # deterministic stochastic corruptions
         xs, ys = [], []
         for img_t, lab in items:
