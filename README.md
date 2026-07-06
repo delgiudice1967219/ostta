@@ -11,7 +11,7 @@ on likely-known inputs and an L1 feature-norm penalty on likely-novel ones),
 plus the geometry diagnostics used in the report. Method, analysis, and
 results are in the accompanying report.
 
-## How the code is organized
+## Repository
 
 Every method is one configuration of a single **factorized adapter**
 (`score`, `gmm_fit`, `ood_op`, `label`, `reliability_gate`), so Tent, NOVA,
