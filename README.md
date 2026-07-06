@@ -1,40 +1,15 @@
 # The Geometry of Open-Set Test-Time Adaptation
 
-Online test-time adaptation (TTA) that keeps a classifier accurate under input
-corruption **while still detecting semantically novel inputs** — and a
-last-layer-geometry account of why the standard recipe fails at exactly that.
-
-A source-trained classifier degrades when the test stream is corrupted (noise,
-blur, weather). TTA recovers accuracy online and label-free by updating only the
-BatchNorm affine parameters; the standard rule, entropy minimization (Tent),
-lowers uncertainty on *every* input. Real streams are open-set: they also carry
-novel-class inputs the model should refuse to classify. Tent makes the model
-confident on those too — accuracy rises while novelty detection collapses.
-
-**The diagnosis.** With a frozen linear head, a class score can only grow two
-ways: a larger feature norm or a better alignment to the class prototype.
-Tracking both factors over adaptation shows Tent breaks detection through the
-*angle* — it rotates novel features onto the known class directions (alignment
-0.40→0.55, novel confidence 0.69→0.87) — while the norm gap the energy detector
-reads stays intact.
-
-**The method.** **NOVA** (Norm-Oriented Vector Alignment) scores each input by
-its max-cosine alignment to the class prototypes read from the *frozen* source
-model (a signal adaptation cannot corrupt), turns pooled scores into a novelty
-posterior via a two-component GMM, and applies entropy minimization on
-likely-known inputs and an L1 feature-norm penalty on likely-novel ones.
-
-**Headline results** (CIFAR-10-C known vs SVHN-C novel, WideResNet-40-2,
-mean over 15 corruptions ± std over 3 seeds, energy-score detection AUROC):
-
-| protocol | Tent | UniEnt | NOVA |
-|---|---|---|---|
-| per-corruption (T=80, reset) | 66.1 ±1.5 | 86.9 ±0.6 | **89.7 ±0.4** |
-| continual (single pass) | 65.4 ±1.5 | **86.1 ±0.1** | 84.6 ±0.9 |
-
-The ranking is protocol-dependent and the paper reports it honestly: NOVA's
-norm penalty needs several gradient steps, so UniEnt's single-step entropy
-maximization edges it under a strict single pass.
+Code for the DLAI project on open-set test-time adaptation (TTA): adapting a
+classifier online to input corruption while still detecting semantically novel
+inputs. The benchmark follows UniEnt: CIFAR-10-C as the corrupted known
+classes, SVHN under the same corruptions as the novel source, a frozen
+WideResNet-40-2 (RobustBench / AugMix) adapting only its BatchNorm affine
+parameters. The repo implements Tent, BN-adapt, UniEnt/UniEnt+ and **NOVA**
+(frozen max-cosine scoring, pooled GMM novelty posterior, entropy minimization
+on likely-known inputs and an L1 feature-norm penalty on likely-novel ones),
+plus the geometry diagnostics used in the report. Method, analysis, and
+results are in the accompanying report.
 
 ## How the code is organized
 
@@ -51,10 +26,10 @@ src/
   eval/            metrics (AUROC, FPR95 in both conventions, OSCR) + per-step time-tracking
   run.py           per-corruption protocol (adapt T steps, reset; trajectory diagnostics)
   run_continual.py continual protocol (one online pass over all 15 corruptions, no reset)
-  figures.py       renders every paper figure from saved artifacts (no GPU needed)
+  figures.py       renders every report figure from saved artifacts (no GPU needed)
 experiments/
   configs/         Hydra config tree (top-level + a `method` group; one yaml per method/cell)
-  scripts/         SLURM batch scripts (each maps to one experiment batch in the paper)
+  scripts/         SLURM batch scripts (each maps to one experiment batch in the report)
 ```
 
 ## Setup
@@ -76,7 +51,7 @@ uv run python src/run.py -m method=bnadapt,tent,unient,unient_plus,nova \
 # continual protocol: one online pass over all 15 corruptions
 uv run python src/run_continual.py method=nova device=cuda
 
-# regenerate all paper figures
+# regenerate all report figures
 uv run python src/figures.py
 ```
 
